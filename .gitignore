@@ -1,0 +1,25 @@
+# TODO-файл ведётся локально и не входит в состав коммитов.
+Todo.md
+
+# Результаты сборки CMake.
+/build/
+build*/
+
+# Исполняемые и промежуточные файлы компилятора.
+*.exe
+*.obj
+*.o
+*.a
+*.dll
+*.ilk
+*.pdb
+
+# Служебные файлы CMake.
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+Makefile
+
+# Временные файлы офисных приложений.
+~$*

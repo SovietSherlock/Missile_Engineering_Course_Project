@@ -1,0 +1,41 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build Missile Engineering",
+            "type": "shell",
+            "command": "C:\\msys64\\ucrt64\\bin\\g++.exe",
+            "args": [
+                "-std=gnu++17",
+                "-fdiagnostics-color=always",
+                "-g",
+                "main.cpp",
+                "CalcTrajectory.cpp",
+                "KinematicFunc2D.cpp",
+                "GuidanceMethods.cpp",
+                "-o",
+                "${workspaceFolder}\\build\\laba_pro.exe"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Run Missile Engineering",
+            "type": "shell",
+            "dependsOn": "Build Missile Engineering",
+            "command": "${workspaceFolder}\\build\\laba_pro.exe",
+            "options": {
+                "cwd": "${workspaceFolder}\\build"
+            },
+            "problemMatcher": []
+        }
+    ]
+}
