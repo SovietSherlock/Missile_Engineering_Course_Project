@@ -305,7 +305,7 @@ std::vector<GorkaOptimizationResult> optimize_gorka_ranges(
     std::cout << "========================================" << std::endl;
     
     // Открываем лог-файл
-    std::ofstream logFile("gorka_optimization_v26.txt", std::ios::app);
+    std::ofstream logFile("gorka_optimization.txt", std::ios::app);
     logFile << "\n=== GORKA OPTIMIZATION (FIXED PARAMS) ===\n";
     logFile << "m0=" << rocket.m0_start << ", mu=" << mu << ", beta=" << rocket.beta 
             << ", eta=" << eta << ", Km=" << km << ", Kp=" << kp 
@@ -514,8 +514,8 @@ OptimizeResult optimize_max_range_parallel(
     std::atomic<int> base_ok_count{0};
     std::atomic<int> high_ok_count{0};
 
-    std::ofstream logFile("optimization_v26.txt", std::ios::app);
-    logFile << "\n=== V26 OPTIMIZATION (MAX RANGE) PARALLEL START ===\n";
+    std::ofstream logFile("optimization.txt", std::ios::app);
+    logFile << "\n=== OPTIMIZATION (MAX RANGE) PARALLEL START ===\n";
     logFile << "Threads: 16\n";
     logFile << "Total param combinations: " << total_combinations << "\n";
     logFile << "Base scenario: 0.2 km, 120 m/s, 150 km\n";
@@ -842,14 +842,14 @@ int main()
 
     // === 1. НИЗКОВЫСОТНЫЙ СЦЕНАРИЙ (EVT) ===
     // method.Method = GuidanceMethod::EVT;
-    // run_and_save("V26_Best_low", calc, limits,
+    // run_and_save("Best_low", calc, limits,
     //              Cdata, Ndata, Rdata, init_low,
     //              method, rocket,
     //              mu, eta, Km, Kp, Kg);
 
     // // === 2. ВЫСОКОВЫСОТНЫЙ СЦЕНАРИЙ (EVT) ===
     // method.Method = GuidanceMethod::EVT;
-    // run_and_save("V26_Best_high", calc, limits,
+    // run_and_save("Best_high", calc, limits,
     //              Cdata, Ndata, Rdata, init_high,
     //              method, rocket,
     //              mu, eta, Km, Kp, Kg);
@@ -870,7 +870,7 @@ int main()
     // method.k = 3.0;
     // method.K_g = 1.8;
 
-    // run_and_save("V26_Best_gorka", calc, limits,
+    // run_and_save("Best_gorka", calc, limits,
     //              Cdata, Ndata, Rdata, init_Gorka,
     //              method, rocket,
     //              mu, eta, Km, Kp, Kg);
