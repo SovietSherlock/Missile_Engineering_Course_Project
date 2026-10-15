@@ -671,11 +671,43 @@ void save_flat_flight_trajectory(
     }
 }
 
+void save_flat_flight_summary(
+    const RocketParams& rocket,
+    const FlatFlightOptimizationResult& best)
+{
+    constexpr double rocket_density = 1555.0;
+    const double rocket_length =
+        (24.0 * best.m0) /
+        (5.0 * pi * rocket.d * rocket.d * rocket_density);
+    const double mu_0 = best.mu - best.mu_1;
+
+    std::ofstream file("flat_flight_summary.tsv");
+    file << "Показатель\tЗначение\tЕдиницы\n";
+    file << std::setprecision(12);
+    file << "m0\t" << best.m0 << "\tкг\n"
+         << "mu (mu_summ)\t" << best.mu << "\t-\n"
+         << "mu_0\t" << mu_0 << "\t-\n"
+         << "mu_1\t" << best.mu_1 << "\t-\n"
+         << "beta\t" << best.beta << "\t-\n"
+         << "Длина ракеты\t" << rocket_length << "\tм\n"
+         << "Калибр (диаметр)\t" << rocket.d << "\tм ("
+         << rocket.d * 1000.0 << " мм)\n"
+         << "eta\t" << best.eta << "\t-\n"
+         << "Km\t" << best.Km << "\t-\n"
+         << "Kp\t" << best.Kp << "\t-\n"
+         << "Kg\t" << best.Kg << "\t-\n"
+         << "k\t" << best.k << "\t-\n"
+         << "V0\t" << best.initial_velocity << "\tм/с\n"
+         << "V_final\t" << best.final_velocity << "\tм/с\n"
+         << "t\t" << best.flight_time << "\tс\n"
+         << "Остаток топлива\t" << best.fuel_remaining << "\tкг\n";
+}
+
 FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
     const RocketParams& rocket)
 {
     constexpr double altitude = 8000.0;
-    constexpr double target_range = 315'000.0;
+    constexpr double target_range = 325'000.0;
     constexpr double target_velocity = 700.0;
     constexpr double range_tolerance = 100.0;
     constexpr double max_start_mass = 650.0;
@@ -692,9 +724,9 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
     // std::vector<double> eta_vals = {6.0, 8.0, 10.0, 12.0, 14.0,
     //                                 16.0, 18.0, 20.0, 22.0, 24.0};
     std::vector<double> eta_vals = {1.5, 2.0, 3.0, 4.0, 5.0, 6.0};
-    // std::vector<double> km_vals = {10.0, 12.0, 14.0, 16.0,
-    //                                18.0, 20.0, 22.0};
-    std::vector<double> km_vals = {4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 14.0};
+    std::vector<double> km_vals = {10.0, 12.0, 14.0, 16.0,
+                                   18.0, 20.0, 22.0};
+    // std::vector<double> km_vals = {4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 14.0};
     std::vector<double> kp_vals = {0.25, 0.30, 0.35, 0.40, 0.45, 0.50};
     std::vector<double> kg_vals = {1.05, 1.1, 1.2, 1.3, 1.4, 1.5,
                                    1.6, 1.7, 1.8, 1.9, 2.0};
@@ -841,6 +873,8 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
             best.fuel_remaining = detailed_result.fuel_remaining;
             save_flat_flight_trajectory(best_trajectory);
         }
+
+        save_flat_flight_summary(rocket, best);
     }
 
     std::cout << "\n========================================" << std::endl;

@@ -1,4 +1,8 @@
 from pathlib import Path
+from html import escape
+import math
+import numbers
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -21,8 +25,137 @@ def find_result_file() -> Path:
     )
 
 
+def excel_column_name(column_number: int) -> str:
+    """Возвращает имя столбца Excel по его номеру, начиная с 1."""
+    name = ""
+    while column_number:
+        column_number, remainder = divmod(column_number - 1, 26)
+        name = chr(ord("A") + remainder) + name
+    return name
+
+
+def save_tables_to_excel(
+    tables: list[tuple[str, pd.DataFrame]], destination: Path
+) -> None:
+    """Сохраняет несколько таблиц в xlsx без дополнительного Excel-модуля."""
+    max_excel_rows = 1_048_576
+
+    def worksheet_xml(table: pd.DataFrame) -> str:
+        if len(table) + 1 > max_excel_rows:
+            raise ValueError("Таблица превышает ограничение Excel по числу строк")
+
+        worksheet = [
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
+            "<sheetData>",
+        ]
+
+        def text_cell(reference: str, value: object) -> str:
+            return (
+                f'<c r="{reference}" t="inlineStr"><is><t>'
+                f"{escape(str(value))}</t></is></c>"
+            )
+
+        def value_cell(reference: str, value: object) -> str:
+            if value is None or bool(pd.isna(value)):
+                return f'<c r="{reference}"/>'
+
+            if isinstance(value, numbers.Number) and not isinstance(value, bool):
+                number = float(value)
+                if not math.isfinite(number):
+                    return f'<c r="{reference}"/>'
+                number_text = format(number, ".15g")
+                if number_text == "-0":
+                    number_text = "0"
+                return f'<c r="{reference}"><v>{number_text}</v></c>'
+
+            if isinstance(value, bool):
+                return f'<c r="{reference}" t="b"><v>{int(value)}</v></c>'
+
+            return text_cell(reference, value)
+
+        header_cells = [
+            text_cell(f"{excel_column_name(index)}1", column)
+            for index, column in enumerate(table.columns, start=1)
+        ]
+        worksheet.append('<row r="1">' + "".join(header_cells) + "</row>")
+
+        for row_number, row in enumerate(
+            table.itertuples(index=False, name=None), start=2
+        ):
+            cells = [
+                value_cell(f"{excel_column_name(column_number)}{row_number}", value)
+                for column_number, value in enumerate(row, start=1)
+            ]
+            worksheet.append(
+                f'<row r="{row_number}">' + "".join(cells) + "</row>"
+            )
+
+        worksheet.append("</sheetData></worksheet>")
+        return "".join(worksheet)
+
+    worksheets = [
+        (sheet_name, worksheet_xml(table)) for sheet_name, table in tables
+    ]
+    content_type_overrides = "\n".join(
+        f'  <Override PartName="/xl/worksheets/sheet{index}.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        for index, _ in enumerate(worksheets, start=1)
+    )
+    content_types = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+{content_type_overrides}
+</Types>"""
+    package_relationships = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+    sheet_entries = "\n".join(
+        f'    <sheet name="{escape(sheet_name)}" sheetId="{index}" r:id="rId{index}"/>'
+        for index, (sheet_name, _) in enumerate(worksheets, start=1)
+    )
+    workbook = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+{sheet_entries}
+  </sheets>
+</workbook>"""
+    relationship_entries = "\n".join(
+        f'  <Relationship Id="rId{index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{index}.xml"/>'
+        for index, _ in enumerate(worksheets, start=1)
+    )
+    workbook_relationships = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+{relationship_entries}
+</Relationships>"""
+
+    with ZipFile(destination, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", package_relationships)
+        archive.writestr("xl/workbook.xml", workbook)
+        archive.writestr("xl/_rels/workbook.xml.rels", workbook_relationships)
+        for index, (_, xml) in enumerate(worksheets, start=1):
+            archive.writestr(f"xl/worksheets/sheet{index}.xml", xml)
+
+
 result_file = find_result_file()
 result = pd.read_csv(result_file, delimiter="\t")
+summary_file = result_file.with_name("flat_flight_summary.tsv")
+if not summary_file.exists():
+    raise FileNotFoundError(
+        f"Файл {summary_file.name} не найден. "
+        "Сначала повторно запустите расчёт программы."
+    )
+summary = pd.read_csv(summary_file, delimiter="\t")
+excel_file = result_file.with_name("flat_flight_trajectory.xlsx")
+save_tables_to_excel(
+    [("Summary", summary), ("Trajectory", result)],
+    excel_file,
+)
+print(f"Таблица Excel сохранена: {excel_file}")
 
 common_layout = dict(
     template="plotly_white",
