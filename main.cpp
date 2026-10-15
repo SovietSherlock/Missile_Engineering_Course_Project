@@ -258,6 +258,7 @@ struct GorkaOptimizationResult {
 struct FlatFlightSimulationResult {
     bool reached_range = false;
     double m0 = 0.0;
+    double mu_1 = 0.0;
     double beta = 0.0;
     double initial_velocity = 0.0;
     double final_velocity = 0.0;
@@ -270,6 +271,7 @@ struct FlatFlightOptimizationResult {
     bool valid = false;
     double m0 = 0.0;
     double mu = 0.0;
+    double mu_1 = 0.0;
     double beta = 0.0;
     double eta = 0.0;
     double Km = 0.0;
@@ -414,7 +416,7 @@ FlatFlightSimulationResult simulate_flat_flight(
     const double speed_of_sound = Atm_GOST4401::a_atm(altitude);
     const double p0 = Atm_GOST4401::p_atm(0.0);
     const double pressure_delta = p0 - Atm_GOST4401::p_atm(altitude);
-    const double I_ud = 2600.0;
+    const double I_ud = 2650.0;
     const double fuel_epsilon = 1e-12;
     const double angle_ratio_limit = 20.0 * pi / 180.0;
     constexpr double max_start_mass = 650.0;
@@ -440,9 +442,11 @@ FlatFlightSimulationResult simulate_flat_flight(
     const double dry_mass = m0 - fuel;
     const double fuel_mode_1 = fuel / (1.0 + km);
     const double fuel_mode_2 = fuel - fuel_mode_1;
+    const double mu_1 = fuel_mode_2 / m0;
     double x = 0.0;
     double t = 0.0;
     double v = result.initial_velocity;
+    result.mu_1 = mu_1;
 
     if (!std::isfinite(fuel_mode_1) || !std::isfinite(fuel_mode_2) ||
         fuel_mode_1 < 0.0 || fuel_mode_2 < 0.0 || dry_mass <= 0.0)
@@ -587,7 +591,7 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
     const RocketParams& rocket)
 {
     constexpr double altitude = 8000.0;
-    constexpr double target_range = 300'000.0;
+    constexpr double target_range = 315'000.0;
     constexpr double target_velocity = 700.0;
     constexpr double range_tolerance = 100.0;
     constexpr double max_start_mass = 650.0;
@@ -625,7 +629,7 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
     result_file << "Range_tolerance_m=" << range_tolerance
                 << " Minimum_velocity_m_s=" << target_velocity
                 << " Maximum_start_mass_strict_m0_kg=" << max_start_mass << "\n";
-    result_file << "m0\tmu\tbeta\teta\tKm\tKp\tKg\tk"
+    result_file << "m0\tmu\tmu_1\tbeta\teta\tKm\tKp\tKg\tk"
                 << "\tv0\tv_final\tt_flight\tfuel_remaining\tstatus\n";
 
     FlatFlightOptimizationResult best;
@@ -642,6 +646,7 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
         destination.valid = true;
         destination.m0 = simulation.m0;
         destination.mu = mu;
+        destination.mu_1 = simulation.mu_1;
         destination.beta = simulation.beta;
         destination.eta = eta;
         destination.Km = km;
@@ -711,7 +716,8 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
                                                   mu, eta, km, kp, kg, k);
                                     result_file << std::setprecision(10)
                                                 << simulation.m0 << "\t"
-                                                << mu << "\t" << simulation.beta << "\t"
+                                                << mu << "\t" << simulation.mu_1 << "\t"
+                                                << simulation.beta << "\t"
                                                 << eta << "\t" << km << "\t"
                                                 << kp << "\t" << kg << "\t"
                                                 << k << "\t"
@@ -754,7 +760,8 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
     {
         std::cout << "\n=== МИНИМАЛЬНАЯ СТАРТОВАЯ МАССА ===" << std::endl;
         std::cout << "m0 = " << best.m0 << " кг" << std::endl;
-        std::cout << "mu = " << best.mu << ", beta = " << best.beta << std::endl;
+        std::cout << "mu = " << best.mu << ", mu_1 = " << best.mu_1
+                  << ", beta = " << best.beta << std::endl;
         std::cout << "eta = " << best.eta << ", Km = " << best.Km
                   << ", Kp = " << best.Kp << std::endl;
         std::cout << "Kg = " << best.Kg << ", k = " << best.k << std::endl;

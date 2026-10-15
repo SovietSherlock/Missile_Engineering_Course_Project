@@ -31,7 +31,7 @@ std::string CalcTrajectory(
     unsigned int N_max = static_cast<unsigned int>(std::ceil(limits.t_r_max / dt)) + 4;
 
     // --- Параметры двигателя ---
-    const double I_ud = 2600.0;
+    const double I_ud = 2650.0;
     double m_pn    = rocket.m_pn();     // масса полезной нагрузки (БЧ + ОУН + НП)
     double diametr = rocket.d;
     double beta    = rocket.beta;
@@ -43,6 +43,7 @@ std::string CalcTrajectory(
 
     double m_fuel_raz = m_fuel / (1.0 + K_m);
     double m_fuel_dva = m_fuel_raz * K_m;
+    const double mu_1 = m_fuel_dva / m_0_start;
     double m_0 = m_0_start;
 
     double tiaga_raz = eta_0 * m_0 * g;
@@ -639,7 +640,9 @@ std::string CalcTrajectory(
     }
 
     std::cout << "Dist_to_target=" << s.back().r_rc
-              << " Fuel_load=" << (m_fuel_raz + m_fuel_dva) <<  " beta=" << rocket.beta  << " mu=" << mu_0 << " k="<< MethodData.k << " kp=" << K_P << " km=" << K_m << " eta="<< eta_0 << std::endl;
+              << " Fuel_load=" << (m_fuel_raz + m_fuel_dva)
+              << " mu_1=" << mu_1
+              << " beta=" << rocket.beta  << " mu=" << mu_0 << " k="<< MethodData.k << " kp=" << K_P << " km=" << K_m << " eta="<< eta_0 << std::endl;
 
     if (returnCode == "0")
     {
