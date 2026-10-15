@@ -255,6 +255,22 @@ struct GorkaOptimizationResult {
 // ============================================================================
 // РЕЗУЛЬТАТЫ ОПТИМИЗАЦИИ МАССЫ ДЛЯ ГОРИЗОНТАЛЬНОГО ПОЛЁТА
 // ============================================================================
+struct FlatFlightPoint {
+    double t = 0.0;
+    double x_g_r = 0.0;
+    double y_g_r = 0.0;
+    double v_r = 0.0;
+    double Theta_r = 0.0;
+    double n_xa_r = 0.0;
+    double fuel_rate = 0.0;
+    double fuel_remaining = 0.0;
+    double P_r = 0.0;
+    double mass_r = 0.0;
+    double mu_summ = 0.0;
+    double mu_0 = 0.0;
+    double mu_1 = 0.0;
+};
+
 struct FlatFlightSimulationResult {
     bool reached_range = false;
     double m0 = 0.0;
@@ -391,9 +407,12 @@ FlatFlightSimulationResult simulate_flat_flight(
     double altitude,
     double target_range,
     double target_velocity,
-    double integration_dt)
+    double integration_dt,
+    std::vector<FlatFlightPoint>* trajectory = nullptr)
 {
     FlatFlightSimulationResult result;
+    if (trajectory != nullptr)
+        trajectory->clear();
 
     double m0 = 0.0;
     double beta = 0.0;
@@ -454,6 +473,41 @@ FlatFlightSimulationResult simulate_flat_flight(
         result.status = "invalid_fuel_design";
         return result;
     }
+
+    auto append_point = [&](double point_t,
+                            double point_x,
+                            double point_v,
+                            double point_fuel,
+                            double point_thrust,
+                            double point_fuel_rate,
+                            double point_acceleration)
+    {
+        if (trajectory == nullptr)
+            return;
+
+        // В точке траектории point_fuel включает остаток обоих режимов:
+        // сначала расходуется топливо стартового режима, а затем маршевого.
+        const double fuel_mode_0_remaining = std::max(
+            0.0, std::min(fuel_mode_1, point_fuel - fuel_mode_2));
+        const double fuel_mode_1_remaining =
+            std::min(point_fuel, fuel_mode_2);
+
+        FlatFlightPoint point;
+        point.t = point_t;
+        point.x_g_r = point_x;
+        point.y_g_r = altitude;
+        point.v_r = point_v;
+        point.Theta_r = 0.0;
+        point.n_xa_r = point_acceleration / g;
+        point.fuel_rate = point_fuel_rate;
+        point.fuel_remaining = point_fuel;
+        point.P_r = point_thrust;
+        point.mass_r = dry_mass + point_fuel;
+        point.mu_summ = point_fuel / m0;
+        point.mu_0 = fuel_mode_0_remaining / m0;
+        point.mu_1 = fuel_mode_1_remaining / m0;
+        trajectory->push_back(point);
+    };
 
     // Ограничение времени предотвращает бесконечный расчёт при потере
     // скорости или при недостижимости заданной дальности.
@@ -526,6 +580,8 @@ FlatFlightSimulationResult simulate_flat_flight(
             }
         }
 
+        append_point(t, x, v, fuel, thrust, fuel_rate, acceleration);
+
         if (v + acceleration * dt_step <= 0.0)
         {
             result.status = "speed_nonpositive";
@@ -564,6 +620,7 @@ FlatFlightSimulationResult simulate_flat_flight(
             t += dt_to_target;
             v += acceleration * dt_to_target;
             fuel = std::max(0.0, fuel - fuel_rate * dt_to_target);
+            append_point(t, x, v, fuel, thrust, fuel_rate, acceleration);
 
             result.reached_range = true;
             result.final_velocity = v;
@@ -585,6 +642,33 @@ FlatFlightSimulationResult simulate_flat_flight(
     result.flight_time = t;
     result.fuel_remaining = fuel;
     return result;
+}
+
+void save_flat_flight_trajectory(
+    const std::vector<FlatFlightPoint>& trajectory)
+{
+    std::ofstream file("flat_flight_trajectory.gra");
+    file << "t\tx_g_r\ty_g_r\tv_r\tTheta_r\tn_xa_r"
+         << "\tfuel_rate\tfuel_remaining\tP_r\tmass_r"
+         << "\tmu_summ\tmu_0\tmu_1\n";
+
+    file << std::setprecision(12);
+    for (const FlatFlightPoint& point : trajectory)
+    {
+        file << point.t << "\t"
+             << point.x_g_r << "\t"
+             << point.y_g_r << "\t"
+             << point.v_r << "\t"
+             << point.Theta_r << "\t"
+             << point.n_xa_r << "\t"
+             << point.fuel_rate << "\t"
+             << point.fuel_remaining << "\t"
+             << point.P_r << "\t"
+             << point.mass_r << "\t"
+             << point.mu_summ << "\t"
+             << point.mu_0 << "\t"
+             << point.mu_1 << "\n";
+    }
 }
 
 FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
@@ -741,6 +825,24 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
     result_file << "Feasible combinations: " << feasible_combinations << "\n";
     result_file.close();
 
+    std::vector<FlatFlightPoint> best_trajectory;
+    if (best.valid)
+    {
+        FlatFlightSimulationResult detailed_result = simulate_flat_flight(
+            rocket, best.mu, best.eta, best.Km, best.Kp,
+            altitude, target_range, target_velocity,
+            validation_dt, &best_trajectory);
+
+        if (detailed_result.reached_range)
+        {
+            best.initial_velocity = detailed_result.initial_velocity;
+            best.final_velocity = detailed_result.final_velocity;
+            best.flight_time = detailed_result.flight_time;
+            best.fuel_remaining = detailed_result.fuel_remaining;
+            save_flat_flight_trajectory(best_trajectory);
+        }
+    }
+
     std::cout << "\n========================================" << std::endl;
     std::cout << "=== ОПТИМИЗАЦИЯ МИНИМАЛЬНОЙ МАССЫ: ГОРИЗОНТАЛЬНЫЙ ПОЛЁТ ==="
               << std::endl;
@@ -762,20 +864,29 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
         std::cout << "m0 = " << best.m0 << " кг" << std::endl;
         std::cout << "mu = " << best.mu << ", mu_1 = " << best.mu_1
                   << ", beta = " << best.beta << std::endl;
+        constexpr double rocket_density = 1555.0;
+        const double rocket_length =
+            (24.0 * best.m0) /
+            (5.0 * pi * rocket.d * rocket.d * rocket_density);
+        std::cout << "Длина ракеты = " << rocket_length << " м" << std::endl;
+        std::cout << "Калибр (диаметр) = " << rocket.d << " м ("
+                  << rocket.d * 1000.0 << " мм)" << std::endl;
         std::cout << "eta = " << best.eta << ", Km = " << best.Km
                   << ", Kp = " << best.Kp << std::endl;
         std::cout << "Kg = " << best.Kg << ", k = " << best.k << std::endl;
         std::cout << "V0 = " << best.initial_velocity << " м/с"
-                  << ", V700km = " << best.final_velocity << " м/с"
+                  << ", V_final = " << best.final_velocity << " м/с"
                   << ", t = " << best.flight_time << " с" << std::endl;
         std::cout << "Остаток топлива = " << best.fuel_remaining << " кг"
+                  << std::endl;
+        std::cout << "График временных рядов: flat_flight_trajectory.gra"
                   << std::endl;
     }
     else if (closest.valid)
     {
         std::cout << "\nРешение в заданном допуске не найдено." << std::endl;
         std::cout << "Ближайший результат: m0 = " << closest.m0
-                  << " кг, V700km = " << closest.final_velocity
+                  << " кг, V_final = " << closest.final_velocity
                   << " м/с, недобор = " << closest.speed_deficit << " м/с"
                   << std::endl;
     }
