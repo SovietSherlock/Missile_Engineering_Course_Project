@@ -280,7 +280,7 @@ struct FlatFlightOptimizationResult {
     double final_velocity = 0.0;
     double flight_time = 0.0;
     double fuel_remaining = 0.0;
-    double speed_error = std::numeric_limits<double>::max();
+    double speed_deficit = std::numeric_limits<double>::max();
 };
 
 // Расчёт стартовой массы выполняется по той же зависимости beta(mu),
@@ -580,10 +580,9 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
     const RocketParams& rocket)
 {
     constexpr double altitude = 8000.0;
-    constexpr double target_range = 700'000.0;
+    constexpr double target_range = 200'000.0;
     constexpr double target_velocity = 700.0;
     constexpr double range_tolerance = 100.0;
-    constexpr double velocity_tolerance = 1.0;
     constexpr double coarse_velocity_window = 10.0;
     constexpr double scan_dt = 0.5;
     constexpr double validation_dt = 0.01;
@@ -594,10 +593,12 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
     for (double mu = 0.44; mu <= 0.6501; mu += 0.01)
         mu_vals.push_back(mu);
 
-    std::vector<double> eta_vals = {6.0, 8.0, 10.0, 12.0, 14.0,
-                                    16.0, 18.0, 20.0, 22.0, 24.0};
-    std::vector<double> km_vals = {10.0, 12.0, 14.0, 16.0,
-                                   18.0, 20.0, 22.0};
+    // std::vector<double> eta_vals = {6.0, 8.0, 10.0, 12.0, 14.0,
+    //                                 16.0, 18.0, 20.0, 22.0, 24.0};
+    std::vector<double> eta_vals = {1.5, 2.0, 3.0, 4.0, 5.0, 6.0};
+    // std::vector<double> km_vals = {10.0, 12.0, 14.0, 16.0,
+    //                                18.0, 20.0, 22.0};
+    std::vector<double> km_vals = {4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 14.0};
     std::vector<double> kp_vals = {0.25, 0.30, 0.35, 0.40, 0.45, 0.50};
     std::vector<double> kg_vals = {1.05, 1.1, 1.2, 1.3, 1.4, 1.5,
                                    1.6, 1.7, 1.8, 1.9, 2.0};
@@ -614,7 +615,7 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
                 << " Initial_Mach=0.8"
                 << " Target_velocity_m_s=" << target_velocity << "\n";
     result_file << "Range_tolerance_m=" << range_tolerance
-                << " Velocity_tolerance_m_s=" << velocity_tolerance << "\n";
+                << " Minimum_velocity_m_s=" << target_velocity << "\n";
     result_file << "m0\tmu\tbeta\teta\tKm\tKp\tKg\tk"
                 << "\tv0\tv_final\tt_flight\tfuel_remaining\tstatus\n";
 
@@ -642,8 +643,8 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
         destination.final_velocity = simulation.final_velocity;
         destination.flight_time = simulation.flight_time;
         destination.fuel_remaining = simulation.fuel_remaining;
-        destination.speed_error =
-            std::abs(simulation.final_velocity - target_velocity);
+        destination.speed_deficit = std::max(
+            0.0, target_velocity - simulation.final_velocity);
     };
 
     for (double mu : mu_vals)
@@ -663,8 +664,8 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
                     // Уточняем только близкие к целевой скорости решения,
                     // чтобы не снижать скорость полного перебора сетки.
                     if (simulation.reached_range &&
-                        std::abs(simulation.final_velocity - target_velocity)
-                            <= coarse_velocity_window)
+                        simulation.final_velocity >=
+                            target_velocity - coarse_velocity_window)
                     {
                         simulation = simulate_flat_flight(
                             rocket, mu, eta, km, kp,
@@ -680,9 +681,9 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
                             if (!simulation.reached_range)
                                 continue;
 
-                            const double speed_error = std::abs(
-                                simulation.final_velocity - target_velocity);
-                            if (speed_error < closest.speed_error)
+                            const double speed_deficit = std::max(
+                                0.0, target_velocity - simulation.final_velocity);
+                            if (speed_deficit < closest.speed_deficit)
                             {
                                 assign_result(closest, simulation,
                                               mu, eta, km, kp, kg, k);
@@ -692,7 +693,7 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
                             // полёта: нормальная перегрузка задана условием
                             // удержания высоты n_y = 1. Они всё же проходят
                             // через общую сетку параметров проекта.
-                            if (speed_error <= velocity_tolerance)
+                            if (simulation.final_velocity >= target_velocity)
                             {
                                 ++feasible_combinations;
                                 if (!best.valid || simulation.m0 < best.m0)
@@ -732,8 +733,8 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
     std::cout << "Дальность: " << target_range / 1000.0 << " км"
               << " (допуск " << range_tolerance << " м)" << std::endl;
     std::cout << "Начальная скорость: 0.8 Маха" << std::endl;
-    std::cout << "Целевая конечная скорость: " << target_velocity << " м/с"
-              << " (допуск " << velocity_tolerance << " м/с)" << std::endl;
+    std::cout << "Минимальная конечная скорость: " << target_velocity
+              << " м/с" << std::endl;
     std::cout << "Проверено комбинаций сетки: " << checked_combinations
               << "/" << total_combinations << std::endl;
     std::cout << "Подходящих комбинаций: " << feasible_combinations << std::endl;
@@ -757,7 +758,7 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
         std::cout << "\nРешение в заданном допуске не найдено." << std::endl;
         std::cout << "Ближайший результат: m0 = " << closest.m0
                   << " кг, V700km = " << closest.final_velocity
-                  << " м/с, ошибка = " << closest.speed_error << " м/с"
+                  << " м/с, недобор = " << closest.speed_deficit << " м/с"
                   << std::endl;
     }
     else
@@ -1017,9 +1018,9 @@ OptimizeResult optimize_max_range_parallel(
     for (double mu = 0.44; mu <= 0.6501; mu += 0.01)
         mu_vals.push_back(mu);
 
-    std::vector<double> eta_vals = {6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0};
-    // std::vector<double> km_vals = {4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 14.0};
-    std::vector<double> km_vals = {10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0};
+    std::vector<double> eta_vals = {1.0, 1.5, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0};
+    std::vector<double> km_vals = {4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 14.0};
+    // std::vector<double> km_vals = {10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0};
     std::vector<double> kp_vals = {0.25, 0.30, 0.35, 0.40, 0.45, 0.50};
     std::vector<double> kg_vals = {1.05, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0};
     std::vector<double> k_vals = {1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0};
@@ -1306,14 +1307,14 @@ int main()
 
     // === 1. ЗАПУСК ОПТИМИЗАЦИИ (закомментирован, так как параметры уже найдены) ===
     
-    OptimizeResult result = optimize_max_range_parallel(
-        rocket, calc, limits,
-        Cdata, Ndata, Rdata,
-        init_low,
-        400.0,
-        550.0,
-        10.0
-    );
+    // OptimizeResult result = optimize_max_range_parallel(
+    //     rocket, calc, limits,
+    //     Cdata, Ndata, Rdata,
+    //     init_low,
+    //     400.0,
+    //     550.0,
+    //     10.0
+    // );
 
 
     // BOTH_OK: m0=515.099 mu=0.49 beta=1.14541 eta=6 Km=3 Kp=0.25 Kg=1.9 k=3.5 R_max=700 t_low=277.35 t_high=544.93
