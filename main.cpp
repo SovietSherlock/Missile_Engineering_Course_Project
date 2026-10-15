@@ -417,6 +417,7 @@ FlatFlightSimulationResult simulate_flat_flight(
     const double I_ud = 2600.0;
     const double fuel_epsilon = 1e-12;
     const double angle_ratio_limit = 20.0 * pi / 180.0;
+    constexpr double max_start_mass = 650.0;
 
     if (!std::isfinite(rho) || rho <= 0.0 ||
         !std::isfinite(speed_of_sound) || speed_of_sound <= 0.0)
@@ -428,6 +429,12 @@ FlatFlightSimulationResult simulate_flat_flight(
     result.m0 = m0;
     result.beta = beta;
     result.initial_velocity = 0.8 * speed_of_sound;
+
+    if (m0 >= max_start_mass)
+    {
+        result.status = "start_mass_limit_exceeded";
+        return result;
+    }
 
     double fuel = mu * m0;
     const double dry_mass = m0 - fuel;
@@ -580,9 +587,10 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
     const RocketParams& rocket)
 {
     constexpr double altitude = 8000.0;
-    constexpr double target_range = 200'000.0;
+    constexpr double target_range = 300'000.0;
     constexpr double target_velocity = 700.0;
     constexpr double range_tolerance = 100.0;
+    constexpr double max_start_mass = 650.0;
     constexpr double coarse_velocity_window = 10.0;
     constexpr double scan_dt = 0.5;
     constexpr double validation_dt = 0.01;
@@ -615,7 +623,8 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
                 << " Initial_Mach=0.8"
                 << " Target_velocity_m_s=" << target_velocity << "\n";
     result_file << "Range_tolerance_m=" << range_tolerance
-                << " Minimum_velocity_m_s=" << target_velocity << "\n";
+                << " Minimum_velocity_m_s=" << target_velocity
+                << " Maximum_start_mass_strict_m0_kg=" << max_start_mass << "\n";
     result_file << "m0\tmu\tbeta\teta\tKm\tKp\tKg\tk"
                 << "\tv0\tv_final\tt_flight\tfuel_remaining\tstatus\n";
 
@@ -735,6 +744,8 @@ FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
     std::cout << "Начальная скорость: 0.8 Маха" << std::endl;
     std::cout << "Минимальная конечная скорость: " << target_velocity
               << " м/с" << std::endl;
+    std::cout << "Ограничение стартовой массы: m0 < " << max_start_mass
+              << " кг" << std::endl;
     std::cout << "Проверено комбинаций сетки: " << checked_combinations
               << "/" << total_combinations << std::endl;
     std::cout << "Подходящих комбинаций: " << feasible_combinations << std::endl;
