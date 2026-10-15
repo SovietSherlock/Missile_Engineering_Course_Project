@@ -253,6 +253,524 @@ struct GorkaOptimizationResult {
 };
 
 // ============================================================================
+// РЕЗУЛЬТАТЫ ОПТИМИЗАЦИИ МАССЫ ДЛЯ ГОРИЗОНТАЛЬНОГО ПОЛЁТА
+// ============================================================================
+struct FlatFlightSimulationResult {
+    bool reached_range = false;
+    double m0 = 0.0;
+    double beta = 0.0;
+    double initial_velocity = 0.0;
+    double final_velocity = 0.0;
+    double flight_time = 0.0;
+    double fuel_remaining = 0.0;
+    std::string status;
+};
+
+struct FlatFlightOptimizationResult {
+    bool valid = false;
+    double m0 = 0.0;
+    double mu = 0.0;
+    double beta = 0.0;
+    double eta = 0.0;
+    double Km = 0.0;
+    double Kp = 0.0;
+    double Kg = 0.0;
+    double k = 0.0;
+    double initial_velocity = 0.0;
+    double final_velocity = 0.0;
+    double flight_time = 0.0;
+    double fuel_remaining = 0.0;
+    double speed_error = std::numeric_limits<double>::max();
+};
+
+// Расчёт стартовой массы выполняется по той же зависимости beta(mu),
+// которая используется в существующем алгоритме перебора дальности.
+bool calculate_flat_flight_mass(
+    const RocketParams& rocket,
+    double mu,
+    double& m0,
+    double& beta)
+{
+    if (!std::isfinite(mu) || mu <= 0.0 || mu >= 1.0 || rocket.d <= 0.0)
+        return false;
+
+    const double m_pn = rocket.m_pn();
+    m0 = m_pn / (1.0 - mu);
+    double m_t = mu * m0;
+    beta = 1.0;
+
+    for (int iter = 0; iter < 5; ++iter)
+    {
+        beta = calculate_beta(rocket.d, m_t);
+        if (!std::isfinite(beta) || beta * mu >= 1.0)
+            return false;
+
+        m0 = m_pn / (1.0 - beta * mu);
+        m_t = mu * m0;
+    }
+
+    return std::isfinite(m0) && m0 > 0.0 &&
+           std::isfinite(beta) && beta * mu < 1.0;
+}
+
+// Специализированное решение уравнения подъёмной силы для горизонтального
+// полёта. В отличие от общего find_alpha() используется постоянная n_y = 1,
+// поэтому уравнение имеет вид A*alpha + P*sin(alpha) = m*g.
+double find_flat_flight_alpha(
+    double M,
+    double rho,
+    double v,
+    double d,
+    double mass,
+    double thrust)
+{
+    const double alpha_limit = 20.0 * pi / 180.0;
+    const double delta_over_alpha = delta_bal_over_alpha(M);
+    const double area = S_har(d);
+    const double lift_slope =
+        (C_y_alpha(M) + C_y_delta(M) * delta_over_alpha) *
+        area * rho * v * v / 2.0;
+    const double target = mass * g;
+
+    auto residual = [&](double alpha)
+    {
+        return lift_slope * alpha + thrust * std::sin(alpha) - target;
+    };
+
+    double left = -alpha_limit;
+    double right = alpha_limit;
+    const double residual_left = residual(left);
+    const double residual_right = residual(right);
+    if (residual_left * residual_right > 0.0)
+    {
+        return std::abs(residual_left) < std::abs(residual_right)
+            ? left
+            : right;
+    }
+
+    double alpha = target / (lift_slope + thrust);
+    if (!std::isfinite(alpha) || alpha <= left || alpha >= right)
+        alpha = (left + right) / 2.0;
+
+    // Ньютоновские итерации ускоряют перебор, а ограничение интервалом
+    // сохраняет поведение поиска корня в физически допустимой области.
+    for (int iter = 0; iter < 8; ++iter)
+    {
+        const double value = residual(alpha);
+        if (std::abs(value) < 1e-6)
+            return alpha;
+
+        if (residual_left * value <= 0.0)
+            right = alpha;
+        else
+            left = alpha;
+
+        const double derivative = lift_slope + thrust * std::cos(alpha);
+        double next = alpha;
+        if (std::isfinite(derivative) && std::abs(derivative) > 1e-12)
+            next = alpha - value / derivative;
+
+        if (!std::isfinite(next) || next <= left || next >= right)
+            next = (left + right) / 2.0;
+        alpha = next;
+    }
+
+    return alpha;
+}
+
+// Численное моделирование движения при постоянных высоте и угле наклона.
+// При theta = 0 для удержания горизонтальной траектории задаётся n_y = 1.
+FlatFlightSimulationResult simulate_flat_flight(
+    const RocketParams& rocket,
+    double mu,
+    double eta,
+    double km,
+    double kp,
+    double altitude,
+    double target_range,
+    double target_velocity,
+    double integration_dt)
+{
+    FlatFlightSimulationResult result;
+
+    double m0 = 0.0;
+    double beta = 0.0;
+    if (!calculate_flat_flight_mass(rocket, mu, m0, beta))
+    {
+        result.status = "invalid_mass_design";
+        return result;
+    }
+
+    const double atmosphere_height_min = Atm_GOST4401::TablGOST4401.front()[0];
+    const double atmosphere_height_max = Atm_GOST4401::TablGOST4401.back()[0];
+    if (altitude < atmosphere_height_min || altitude > atmosphere_height_max ||
+        target_range <= 0.0 || target_velocity <= 0.0 || integration_dt <= 0.0)
+    {
+        result.status = "invalid_flight_conditions";
+        return result;
+    }
+
+    const double rho = Atm_GOST4401::rho_atm(altitude);
+    const double speed_of_sound = Atm_GOST4401::a_atm(altitude);
+    const double p0 = Atm_GOST4401::p_atm(0.0);
+    const double pressure_delta = p0 - Atm_GOST4401::p_atm(altitude);
+    const double I_ud = 2600.0;
+    const double fuel_epsilon = 1e-12;
+    const double angle_ratio_limit = 20.0 * pi / 180.0;
+
+    if (!std::isfinite(rho) || rho <= 0.0 ||
+        !std::isfinite(speed_of_sound) || speed_of_sound <= 0.0)
+    {
+        result.status = "invalid_atmosphere_data";
+        return result;
+    }
+
+    result.m0 = m0;
+    result.beta = beta;
+    result.initial_velocity = 0.8 * speed_of_sound;
+
+    double fuel = mu * m0;
+    const double dry_mass = m0 - fuel;
+    const double fuel_mode_1 = fuel / (1.0 + km);
+    const double fuel_mode_2 = fuel - fuel_mode_1;
+    double x = 0.0;
+    double t = 0.0;
+    double v = result.initial_velocity;
+
+    if (!std::isfinite(fuel_mode_1) || !std::isfinite(fuel_mode_2) ||
+        fuel_mode_1 < 0.0 || fuel_mode_2 < 0.0 || dry_mass <= 0.0)
+    {
+        result.status = "invalid_fuel_design";
+        return result;
+    }
+
+    // Ограничение времени предотвращает бесконечный расчёт при потере
+    // скорости или при недостижимости заданной дальности.
+    constexpr double max_flight_time = 3000.0;
+    const std::size_t max_steps = static_cast<std::size_t>(
+        std::ceil(max_flight_time / integration_dt));
+    for (std::size_t step = 0; step < max_steps; ++step)
+    {
+        if (t >= max_flight_time)
+        {
+            result.status = "max_flight_time_exceeded";
+            break;
+        }
+
+        if (!std::isfinite(v) || v <= 0.0)
+        {
+            result.status = "speed_nonpositive";
+            break;
+        }
+
+        const double M = v / speed_of_sound;
+        if (!std::isfinite(M) || M < 0.0 || M > 6.0)
+        {
+            result.status = "speed_limit_exceeding";
+            break;
+        }
+
+        const double current_mass = dry_mass + fuel;
+        const bool mode_1 = fuel > fuel_mode_2 + fuel_epsilon;
+        const double tiaga = mode_1 ? eta * m0 * g : eta * m0 * g * kp;
+        const double fuel_rate = fuel > fuel_epsilon ? tiaga / I_ud : 0.0;
+        const double thrust = fuel > fuel_epsilon
+            ? tiaga + pressure_delta * S_a(rocket.d)
+            : 0.0;
+
+        // Угол alpha подбирается из условия подъёмной силы, необходимой
+        // для компенсации веса при theta = 0.
+        const double alpha = find_flat_flight_alpha(
+            M, rho, v, rocket.d, current_mass, thrust);
+        const double delta = delta_bal_over_alpha(M) * alpha;
+        if (!std::isfinite(alpha) || !std::isfinite(delta) ||
+            delta - alpha >= angle_ratio_limit)
+        {
+            result.status = "unvalid_angle_ratio";
+            break;
+        }
+
+        const double axial_drag = X_a(M, alpha, delta, rho, v, rocket.d, thrust);
+        const double acceleration =
+            (thrust * std::cos(alpha) - axial_drag) / current_mass;
+        if (!std::isfinite(acceleration))
+        {
+            result.status = "invalid_acceleration";
+            break;
+        }
+
+        double dt_step = integration_dt;
+        if (fuel_rate > fuel_epsilon)
+        {
+            double time_to_boundary = std::numeric_limits<double>::infinity();
+            if (mode_1 && fuel > fuel_mode_2)
+                time_to_boundary = (fuel - fuel_mode_2) / fuel_rate;
+            else if (!mode_1)
+                time_to_boundary = fuel / fuel_rate;
+
+            if (time_to_boundary > fuel_epsilon &&
+                time_to_boundary < dt_step)
+            {
+                dt_step = time_to_boundary;
+            }
+        }
+
+        if (v + acceleration * dt_step <= 0.0)
+        {
+            result.status = "speed_nonpositive";
+            break;
+        }
+
+        const double distance_to_target = target_range - x;
+        const double distance_full_step =
+            v * dt_step + 0.5 * acceleration * dt_step * dt_step;
+
+        if (distance_full_step >= distance_to_target)
+        {
+            double dt_to_target = dt_step;
+            if (std::abs(acceleration) < 1e-12)
+            {
+                dt_to_target = distance_to_target / v;
+            }
+            else
+            {
+                const double discriminant =
+                    v * v + 2.0 * acceleration * distance_to_target;
+                if (discriminant >= 0.0)
+                {
+                    dt_to_target =
+                        (-v + std::sqrt(discriminant)) / acceleration;
+                }
+            }
+
+            if (!std::isfinite(dt_to_target) ||
+                dt_to_target < 0.0 || dt_to_target > dt_step)
+            {
+                dt_to_target = dt_step;
+            }
+
+            x = target_range;
+            t += dt_to_target;
+            v += acceleration * dt_to_target;
+            fuel = std::max(0.0, fuel - fuel_rate * dt_to_target);
+
+            result.reached_range = true;
+            result.final_velocity = v;
+            result.flight_time = t;
+            result.fuel_remaining = fuel;
+            result.status = "target_range_reached";
+            return result;
+        }
+
+        x += distance_full_step;
+        t += dt_step;
+        v += acceleration * dt_step;
+        fuel = std::max(0.0, fuel - fuel_rate * dt_step);
+    }
+
+    if (result.status.empty())
+        result.status = "max_steps_exceeded";
+    result.final_velocity = v;
+    result.flight_time = t;
+    result.fuel_remaining = fuel;
+    return result;
+}
+
+FlatFlightOptimizationResult optimize_minimum_mass_flat_flight(
+    const RocketParams& rocket)
+{
+    constexpr double altitude = 8000.0;
+    constexpr double target_range = 700'000.0;
+    constexpr double target_velocity = 700.0;
+    constexpr double range_tolerance = 100.0;
+    constexpr double velocity_tolerance = 1.0;
+    constexpr double coarse_velocity_window = 10.0;
+    constexpr double scan_dt = 0.5;
+    constexpr double validation_dt = 0.01;
+
+    // Сетка параметров совпадает с сеткой существующего алгоритма
+    // оптимизации максимальной дальности.
+    std::vector<double> mu_vals;
+    for (double mu = 0.44; mu <= 0.6501; mu += 0.01)
+        mu_vals.push_back(mu);
+
+    std::vector<double> eta_vals = {6.0, 8.0, 10.0, 12.0, 14.0,
+                                    16.0, 18.0, 20.0, 22.0, 24.0};
+    std::vector<double> km_vals = {10.0, 12.0, 14.0, 16.0,
+                                   18.0, 20.0, 22.0};
+    std::vector<double> kp_vals = {0.25, 0.30, 0.35, 0.40, 0.45, 0.50};
+    std::vector<double> kg_vals = {1.05, 1.1, 1.2, 1.3, 1.4, 1.5,
+                                   1.6, 1.7, 1.8, 1.9, 2.0};
+    std::vector<double> k_vals = {1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0};
+
+    const std::size_t total_combinations =
+        mu_vals.size() * eta_vals.size() * km_vals.size() *
+        kp_vals.size() * kg_vals.size() * k_vals.size();
+
+    std::ofstream result_file("flat_flight_mass_optimization.txt", std::ios::app);
+    result_file << "\n=== FLAT FLIGHT MINIMUM MASS OPTIMIZATION START ===\n";
+    result_file << "Altitude_m=" << altitude
+                << " Range_m=" << target_range
+                << " Initial_Mach=0.8"
+                << " Target_velocity_m_s=" << target_velocity << "\n";
+    result_file << "Range_tolerance_m=" << range_tolerance
+                << " Velocity_tolerance_m_s=" << velocity_tolerance << "\n";
+    result_file << "m0\tmu\tbeta\teta\tKm\tKp\tKg\tk"
+                << "\tv0\tv_final\tt_flight\tfuel_remaining\tstatus\n";
+
+    FlatFlightOptimizationResult best;
+    FlatFlightOptimizationResult closest;
+    std::size_t checked_combinations = 0;
+    std::size_t simulated_designs = 0;
+    std::size_t feasible_combinations = 0;
+
+    auto assign_result = [](FlatFlightOptimizationResult& destination,
+                            const FlatFlightSimulationResult& simulation,
+                            double mu, double eta, double km, double kp,
+                            double kg, double k)
+    {
+        destination.valid = true;
+        destination.m0 = simulation.m0;
+        destination.mu = mu;
+        destination.beta = simulation.beta;
+        destination.eta = eta;
+        destination.Km = km;
+        destination.Kp = kp;
+        destination.Kg = kg;
+        destination.k = k;
+        destination.initial_velocity = simulation.initial_velocity;
+        destination.final_velocity = simulation.final_velocity;
+        destination.flight_time = simulation.flight_time;
+        destination.fuel_remaining = simulation.fuel_remaining;
+        destination.speed_error =
+            std::abs(simulation.final_velocity - target_velocity);
+    };
+
+    for (double mu : mu_vals)
+    {
+        for (double eta : eta_vals)
+        {
+            for (double km : km_vals)
+            {
+                for (double kp : kp_vals)
+                {
+                    FlatFlightSimulationResult simulation =
+                        simulate_flat_flight(
+                            rocket, mu, eta, km, kp,
+                            altitude, target_range, target_velocity, scan_dt);
+                    ++simulated_designs;
+
+                    // Уточняем только близкие к целевой скорости решения,
+                    // чтобы не снижать скорость полного перебора сетки.
+                    if (simulation.reached_range &&
+                        std::abs(simulation.final_velocity - target_velocity)
+                            <= coarse_velocity_window)
+                    {
+                        simulation = simulate_flat_flight(
+                            rocket, mu, eta, km, kp,
+                            altitude, target_range, target_velocity,
+                            validation_dt);
+                    }
+
+                    for (double kg : kg_vals)
+                    {
+                        for (double k : k_vals)
+                        {
+                            ++checked_combinations;
+                            if (!simulation.reached_range)
+                                continue;
+
+                            const double speed_error = std::abs(
+                                simulation.final_velocity - target_velocity);
+                            if (speed_error < closest.speed_error)
+                            {
+                                assign_result(closest, simulation,
+                                              mu, eta, km, kp, kg, k);
+                            }
+
+                            // Kg и k не входят в уравнения горизонтального
+                            // полёта: нормальная перегрузка задана условием
+                            // удержания высоты n_y = 1. Они всё же проходят
+                            // через общую сетку параметров проекта.
+                            if (speed_error <= velocity_tolerance)
+                            {
+                                ++feasible_combinations;
+                                if (!best.valid || simulation.m0 < best.m0)
+                                {
+                                    assign_result(best, simulation,
+                                                  mu, eta, km, kp, kg, k);
+                                    result_file << std::setprecision(10)
+                                                << simulation.m0 << "\t"
+                                                << mu << "\t" << simulation.beta << "\t"
+                                                << eta << "\t" << km << "\t"
+                                                << kp << "\t" << kg << "\t"
+                                                << k << "\t"
+                                                << simulation.initial_velocity << "\t"
+                                                << simulation.final_velocity << "\t"
+                                                << simulation.flight_time << "\t"
+                                                << simulation.fuel_remaining << "\tOK\n";
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    result_file << "=== FLAT FLIGHT MINIMUM MASS OPTIMIZATION DONE ===\n";
+    result_file << "Simulated designs: " << simulated_designs << "\n";
+    result_file << "Checked grid combinations: " << checked_combinations
+                << "/" << total_combinations << "\n";
+    result_file << "Feasible combinations: " << feasible_combinations << "\n";
+    result_file.close();
+
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "=== ОПТИМИЗАЦИЯ МИНИМАЛЬНОЙ МАССЫ: ГОРИЗОНТАЛЬНЫЙ ПОЛЁТ ==="
+              << std::endl;
+    std::cout << "Высота: " << altitude << " м" << std::endl;
+    std::cout << "Дальность: " << target_range / 1000.0 << " км"
+              << " (допуск " << range_tolerance << " м)" << std::endl;
+    std::cout << "Начальная скорость: 0.8 Маха" << std::endl;
+    std::cout << "Целевая конечная скорость: " << target_velocity << " м/с"
+              << " (допуск " << velocity_tolerance << " м/с)" << std::endl;
+    std::cout << "Проверено комбинаций сетки: " << checked_combinations
+              << "/" << total_combinations << std::endl;
+    std::cout << "Подходящих комбинаций: " << feasible_combinations << std::endl;
+
+    if (best.valid)
+    {
+        std::cout << "\n=== МИНИМАЛЬНАЯ СТАРТОВАЯ МАССА ===" << std::endl;
+        std::cout << "m0 = " << best.m0 << " кг" << std::endl;
+        std::cout << "mu = " << best.mu << ", beta = " << best.beta << std::endl;
+        std::cout << "eta = " << best.eta << ", Km = " << best.Km
+                  << ", Kp = " << best.Kp << std::endl;
+        std::cout << "Kg = " << best.Kg << ", k = " << best.k << std::endl;
+        std::cout << "V0 = " << best.initial_velocity << " м/с"
+                  << ", V700km = " << best.final_velocity << " м/с"
+                  << ", t = " << best.flight_time << " с" << std::endl;
+        std::cout << "Остаток топлива = " << best.fuel_remaining << " кг"
+                  << std::endl;
+    }
+    else if (closest.valid)
+    {
+        std::cout << "\nРешение в заданном допуске не найдено." << std::endl;
+        std::cout << "Ближайший результат: m0 = " << closest.m0
+                  << " кг, V700km = " << closest.final_velocity
+                  << " м/с, ошибка = " << closest.speed_error << " м/с"
+                  << std::endl;
+    }
+    else
+    {
+        std::cout << "\nРасчётных траекторий, достигших 700 км, не найдено."
+                  << std::endl;
+    }
+    std::cout << "========================================" << std::endl;
+
+    return best;
+}
+
+// ============================================================================
 // АЛГОРИТМ ОПТИМИЗАЦИИ ДЛЯ МАНЕВРА GORKA С ПЕРЕБОРОМ ДАЛЬНОСТЕЙ
 // ============================================================================
 std::vector<GorkaOptimizationResult> optimize_gorka_ranges(
@@ -499,8 +1017,9 @@ OptimizeResult optimize_max_range_parallel(
     for (double mu = 0.44; mu <= 0.6501; mu += 0.01)
         mu_vals.push_back(mu);
 
-    std::vector<double> eta_vals = {1.0, 2.0, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0};
-    std::vector<double> km_vals = {4.0, 5.0, 6.0, 7.0, 8.0};
+    std::vector<double> eta_vals = {6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0};
+    // std::vector<double> km_vals = {4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 14.0};
+    std::vector<double> km_vals = {10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0};
     std::vector<double> kp_vals = {0.25, 0.30, 0.35, 0.40, 0.45, 0.50};
     std::vector<double> kg_vals = {1.05, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0};
     std::vector<double> k_vals = {1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0};
@@ -725,6 +1244,9 @@ int main()
     double m_pn = rocket.m_pn();
     double mu_fixed = 0.53; // ИЗМЕНИТЬ
     rocket.m0_start = m_pn / (1.0 - rocket.beta * mu_fixed);
+
+    // === ОПТИМИЗАЦИЯ МИНИМАЛЬНОЙ МАССЫ ДЛЯ ГОРИЗОНТАЛЬНОГО ПОЛЁТА ===
+    optimize_minimum_mass_flat_flight(rocket);
 
     CalcParameters calc;
     calc.dt = 0.01;
