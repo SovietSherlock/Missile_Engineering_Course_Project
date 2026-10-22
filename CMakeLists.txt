@@ -7,6 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(laba_pro
     main.cpp
+    BalSimulation.cpp
+    BalSimulation.h
     DataStructs.h
     GuidanceMethods.h
     GuidanceMethods.cpp

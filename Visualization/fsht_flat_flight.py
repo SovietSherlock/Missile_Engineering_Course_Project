@@ -188,14 +188,29 @@ fig.update_layout(**common_layout, title="Изменение прямолине�
 fig.show()
 
 
-# Скорость.
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=result["t"], y=result["v_r"], name="v ракеты"))
+# Скорость в м/с и числах Маха на отдельных полях.
+fig = make_subplots(
+    rows=1,
+    cols=2,
+    subplot_titles=("Скорость, м/с", "Скорость, Мах"),
+)
+fig.add_trace(
+    go.Scatter(x=result["t"], y=result["v_r"], name="v, м/с"),
+    row=1,
+    col=1,
+)
+fig.add_trace(
+    go.Scatter(x=result["t"], y=result["mach"], name="M"),
+    row=1,
+    col=2,
+)
+fig.update_xaxes(title_text="t, с", row=1, col=1)
+fig.update_xaxes(title_text="t, с", row=1, col=2)
+fig.update_yaxes(title_text="v, м/с", row=1, col=1)
+fig.update_yaxes(title_text="M", row=1, col=2)
 fig.update_layout(
     **common_layout,
     title="Изменение скорости по времени",
-    xaxis_title="t, с",
-    yaxis_title="v, м/с",
 )
 fig.show()
 
@@ -214,14 +229,14 @@ fig.update_layout(
 fig.show()
 
 
-# Тангенциальная (осевая) перегрузка.
+# Нормальная перегрузка.
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=result["t"], y=result["n_xa_r"], name="nₓₐ"))
+fig.add_trace(go.Scatter(x=result["t"], y=result["n_ya_r"], name="nᵧₐ"))
 fig.update_layout(
     **common_layout,
-    title="Изменение тангенциальной (осевой) перегрузки",
+    title="Изменение нормальной перегрузки по времени",
     xaxis_title="t, с",
-    yaxis_title="nₓₐ, безразмерная величина",
+    yaxis_title="nᵧₐ, безразмерная величина",
 )
 fig.show()
 

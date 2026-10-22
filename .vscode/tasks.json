@@ -10,6 +10,7 @@
                 "-fdiagnostics-color=always",
                 "-g",
                 "main.cpp",
+                "BalSimulation.cpp",
                 "CalcTrajectory.cpp",
                 "KinematicFunc2D.cpp",
                 "GuidanceMethods.cpp",

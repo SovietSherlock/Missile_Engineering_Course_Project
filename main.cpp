@@ -17,6 +17,7 @@
 #include "KinematicFunc2D.h"
 #include "Atm_GOST4401.h"
 #include "GuidanceMethods.h"
+#include "BalSimulation.h"
 
 // ============================================================================
 // СТРУКТУРА ДЛЯ ХРАНЕНИЯ УСПЕШНЫХ НАБОРОВ ПАРАМЕТРОВ
@@ -1409,8 +1410,14 @@ int main()
     double mu_fixed = 0.53; // ИЗМЕНИТЬ
     rocket.m0_start = m_pn / (1.0 - rocket.beta * mu_fixed);
 
-    // === ОПТИМИЗАЦИЯ МИНИМАЛЬНОЙ МАССЫ ДЛЯ ГОРИЗОНТАЛЬНОГО ПОЛЁТА ===
-    optimize_minimum_mass_flat_flight(rocket);
+    // === НОВЫЙ РАСЧЁТ ПРЯМОЛИНЕЙНОГО ПОЛЁТА ===
+    // Массовая модель и идеализированная двухучастковая траектория
+    // реализованы в отдельном модуле BalSimulation.
+    BalSimulationConfig bal_config;
+    bal_config.diameter = rocket.d;
+    BalSimulationResult bal_result = run_bal_simulation(bal_config);
+    print_bal_simulation_report(bal_config, bal_result);
+    save_bal_simulation_outputs(bal_config, bal_result);
 
     CalcParameters calc;
     calc.dt = 0.01;
