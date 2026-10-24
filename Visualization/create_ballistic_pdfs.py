@@ -110,10 +110,96 @@ def draw_centered_wrapped(
         text_y -= leading
 
 
+def estimate_open_parameters() -> dict[str, dict[str, float]]:
+    """Оценивает отсутствующие параметры по открытым данным и допущениям.
+
+    Это не попытка восстановить закрытые паспортные данные. Расчёт нужен
+    только для того, чтобы в сравнительной таблице не оставлять пустые ячейки
+    без явной маркировки. Формулы для beta, mu и тяговых коэффициентов
+    соответствуют используемой в проекте модели.
+    """
+    sound_speed = 340.0
+    gravity = 9.80665
+    loss_factor = 0.92
+    start_specific_impulse = 2650.0
+    march_specific_impulse = 2620.0
+    start_duration = 5.0
+
+    def calculate_beta(diameter: float, fuel_mass: float) -> float:
+        if diameter <= 0.165:
+            k_d = 3.502064 * (2.699929 * diameter) ** 2.2475
+            beta_inf = 0.010649 / (0.439973 * diameter) ** 0.962255 + 1.0
+        else:
+            k_d = 21.423397 * (1.605279 * diameter) ** 2.817663 + 0.079
+            beta_inf = 0.10013 / (0.436906 * diameter) ** 0.107262 + 1.0
+        return k_d / fuel_mass + beta_inf
+
+    def estimate(
+        mass: float,
+        mu_total: float,
+        diameter: float,
+        initial_mach: float,
+        booster_end_mach: float,
+        calculation_range: float,
+        march_speed: float,
+    ) -> dict[str, float]:
+        delta_v = (booster_end_mach - initial_mach) * sound_speed
+        effective_start_velocity = loss_factor * start_specific_impulse
+        mu_start = 1.0 - math.exp(-delta_v / effective_start_velocity)
+        mu_march = mu_total - mu_start
+        eta_0 = delta_v / start_duration / gravity
+        km = mu_march / mu_start
+        start_distance = (
+            (initial_mach + booster_end_mach) * sound_speed
+            * start_duration / 2.0
+        )
+        march_time = (calculation_range - start_distance) / march_speed
+        start_thrust = eta_0 * mass * gravity
+        march_thrust = mu_march * mass / march_time * march_specific_impulse
+        return {
+            "mu_total": mu_total,
+            "mu_start": mu_start,
+            "mu_march": mu_march,
+            "beta": calculate_beta(diameter, mu_total * mass),
+            "eta_0": eta_0,
+            "km": km,
+            "kp": march_thrust / start_thrust,
+        }
+
+    return {
+        "x35": estimate(
+            mass=580.0,
+            mu_total=0.35,
+            diameter=0.42,
+            initial_mach=0.35,
+            booster_end_mach=0.8,
+            calculation_range=260000.0,
+            march_speed=0.8 * sound_speed,
+        ),
+        "oniks": estimate(
+            mass=3000.0,
+            mu_total=0.55,
+            diameter=0.67,
+            initial_mach=0.0,
+            booster_end_mach=2.0,
+            calculation_range=450000.0,
+            march_speed=2.0 * sound_speed,
+        ),
+    }
+
+
 def create_results_table() -> None:
     """Формирует заполненную сравнительную таблицу на одном листе A4."""
     pdf = canvas.Canvas(str(TABLE_FILE), pagesize=PAGE)
     pdf.setTitle("Результаты баллистического расчёта — заполненная таблица")
+
+    estimates = estimate_open_parameters()
+    x35 = estimates["x35"]
+    oniks = estimates["oniks"]
+    x35_time_min = 260000.0 / 280.0
+    x35_time_max = 260000.0 / 270.0
+    oniks_time_min = 300000.0 / (2.6 * 340.0)
+    oniks_time_max = 600000.0 / (2.0 * 340.0)
 
     margin = 36.0
     table_x = margin
@@ -127,16 +213,16 @@ def create_results_table() -> None:
     ]
     rows = [
         ("Суммарная масса ракеты, кг", "550–610*", "1073,04", "≈ 3000*"),
-        ("Суммарная относительная масса топлива", "н/д", "0,7000", "н/д"),
-        ("Относительная масса топлива разгонного режима", "н/д", "0,1407", "н/д"),
-        ("Относительная масса топлива маршевого режима", "н/д", "0,5593", "н/д"),
-        ("Коэффициент конструктивно-массового совершенства", "н/д", "1,1290", "н/д"),
-        ("Стартовая тяговооруженность", "н/д", "7,5403", "н/д"),
-        ("Коэффициент распределения топлива между режимами (Km)", "н/д", "3,9747", "н/д"),
-        ("Коэффициент отношения тяг (Kp)", "н/д", "0,0175", "н/д"),
-        ("Начальная скорость", "н/д (Mmax≈0,8)*", "0,8 M", "н/д (Mmax≈2,5)*"),
-        ("Конечная скорость", "н/д (Mmax≈0,8)*", "2,0 M", "н/д (Mmax≈2,5)*"),
-        ("Время полёта, с", "н/д", "1137,48", "н/д"),
+        ("Суммарная относительная масса топлива", f"≈ {x35['mu_total']:.3f} (Оценочно)".replace(".", ","), "0,7000", f"≈ {oniks['mu_total']:.3f} (Оценочно)".replace(".", ",")),
+        ("Относительная масса топлива разгонного режима", f"≈ {x35['mu_start']:.3f} (Оценочно)".replace(".", ","), "0,1407", f"≈ {oniks['mu_start']:.3f} (Оценочно)".replace(".", ",")),
+        ("Относительная масса топлива маршевого режима", f"≈ {x35['mu_march']:.3f} (Оценочно)".replace(".", ","), "0,5593", f"≈ {oniks['mu_march']:.3f} (Оценочно)".replace(".", ",")),
+        ("Коэффициент конструктивно-массового совершенства", f"≈ {x35['beta']:.3f} (Оценочно)".replace(".", ","), "1,1290", f"≈ {oniks['beta']:.3f} (Оценочно)".replace(".", ",")),
+        ("Стартовая тяговооруженность", f"≈ {x35['eta_0']:.2f} (Оценочно)".replace(".", ","), "7,5403", f"≈ {oniks['eta_0']:.2f} (Оценочно)".replace(".", ",")),
+        ("Коэффициент распределения топлива между режимами (Km)", f"≈ {x35['km']:.3f} (Оценочно)".replace(".", ","), "3,9747", f"≈ {oniks['km']:.3f} (Оценочно)".replace(".", ",")),
+        ("Коэффициент отношения тяг (Kp)", f"≈ {x35['kp']:.3f} (Оценочно)".replace(".", ","), "0,0175", f"≈ {oniks['kp']:.3f} (Оценочно)".replace(".", ",")),
+        ("Начальная скорость", "≈ 0,35 M (Оценочно)", "0,8 M", "≈ 2,0 M (Оценочно)"),
+        ("Конечная скорость", "≈ 0,8 M (Оценочно)", "2,0 M", "≈ 2,5 M (Оценочно)"),
+        ("Время полёта, с", f"≈ {x35_time_min:.0f}–{x35_time_max:.0f} (Оценочно)", "1137,48", f"≈ {oniks_time_min:.0f}–{oniks_time_max:.0f} (Оценочно)"),
         ("Дальность полёта, км", "260*", "700", "300–600*"),
     ]
 
@@ -208,21 +294,25 @@ def create_results_table() -> None:
     pdf.setFont(FONT, 6.5)
     pdf.setFillColor(colors.HexColor("#333333"))
     notes = [
-        "Примечание: «н/д» означает, что параметр не опубликован в открытой официальной карточке; это не нулевое значение.",
-        "* Для Х-35У в открытой карточке U.S. Army приведён вариант Kh-35UE; масса зависит от исполнения и пускового ускорителя, скорость — максимальная, а не начальная/конечная.",
-        "* Для П-800 «Оникс» приведены открытый диапазон дальности и масса стартового исполнения; эти данные не являются результатом расчёта проекта.",
+        "Примечание: «Оценочно» означает расчёт по открытым данным и явно указанным допущениям; это не паспортная характеристика ракеты.",
+        "* Для Х-35У в карточке U.S. Army приведён вариант Kh-35UE; масса зависит от исполнения. Для Х-35 открытая карточка также указывает 270–280 м/с, диаметр 0,42 м и БЧ 145 кг.",
+        "* Для П-800 «Оникс» приведены открытый диапазон дальности и масса стартового исполнения; карточка «Яхонта» указывает 2,0–2,6 M, БЧ 200–250 кг и сухую массу двигателя 200 кг.",
+        "Оценки топлива заданы как инженерная массовая модель: Х-35У — m₀=580 кг, d=0,42 м, μΣ=0,35; «Оникс» — m₀=3000 кг, d=0,67 м, μΣ=0,55. Для разгона приняты M₀/M₁=0,35/0,8 и 0/2,0 соответственно.",
+        "Для оценок использованы hi=0,92, Iуд старт=2650 м/с, Iуд марш=2620 м/с, tстарт=5 с; для Kp — средняя дальность «Оникса» 450 км. β вычислен функцией проекта.",
         "Параметры проектируемой ракеты рассчитаны BalSimulation при H=8000 м, μсумм=0,7, mпн=225 кг, L=700 км; начальная и конечная скорости указаны в числах Маха.",
     ]
     for note in notes:
         note_y = draw_wrapped(pdf, note, margin, note_y, table_width, FONT, 6.5, 7.5) - 1
 
     pdf.setFont(FONT_BOLD, 6.5)
-    pdf.drawString(margin, note_y, "Официальные источники:")
+    pdf.drawString(margin, note_y, "Источники:")
     note_y -= 8
     pdf.setFont(FONT, 6.0)
     source_lines = [
         "[1] U.S. Army, ODIN/WEG, Kh-35UE Russian Short-Range Cruise Missile: https://odin.t2com.army.mil/WEG/Asset/6fcff411c9e671a6f57ade2512aca882",
         "[2] U.S. Army, ODIN/WEG, P-800 Oniks: https://odin.t2com.army.mil/WEG/Asset/ee8265a1ec4f27de72058cf336eff5f6",
+        "[3] ИС «Ракетная техника», ПКР Х-35 (карточка содержит ссылки на профильные издания и данные комплекса): https://missilery.info/missile/uran",
+        "[4] ИС «Ракетная техника», ПКР «Яхонт» (Оникс), данные НПО Машиностроения и «Бастион» №1/2000: https://missilery.info/missile/jakhont",
     ]
     for source in source_lines:
         note_y = draw_wrapped(pdf, source, margin, note_y, table_width, FONT, 6.0, 7.0)
