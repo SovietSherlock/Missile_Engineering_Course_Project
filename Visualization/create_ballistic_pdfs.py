@@ -11,7 +11,7 @@ import csv
 import math
 import os
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
@@ -346,39 +346,82 @@ def mode_bounds(points: Sequence[dict[str, float]]) -> list[tuple[int, float, fl
     return bounds
 
 
+def build_time_scale(
+    left: float,
+    width: float,
+    t_min: float,
+    t_max: float,
+) -> tuple[Callable[[float, bool], float], float | None, float | None, float | None]:
+    """Создаёт единую неравномерную шкалу времени с увеличением 0–10 с."""
+    if t_max <= t_min:
+        t_max = t_min + 1.0
+
+    if t_max <= 10.0:
+        def linear_time_x(value: float, right_at_break: bool = False) -> float:
+            return left + (value - t_min) / (t_max - t_min) * width
+
+        return linear_time_x, None, None, None
+
+    break_time = 10.0
+    # Левая часть шкалы занимает 34 % поля, чтобы первые 10 секунд
+    # оставались читаемыми; небольшой зазор обозначает разрыв оси.
+    gap = min(10.0, width * 0.03)
+    left_width = width * 0.34
+    right_width = width - left_width - gap
+    break_left = left + left_width
+    break_right = break_left + gap
+
+    def broken_time_x(value: float, right_at_break: bool = False) -> float:
+        if value < break_time or (value == break_time and not right_at_break):
+            return left + (value - t_min) / (break_time - t_min) * left_width
+        return break_right + (value - break_time) / (t_max - break_time) * right_width
+
+    return broken_time_x, break_time, break_left, break_right
+
+
 def draw_mode_background(
     pdf: canvas.Canvas,
     points: Sequence[dict[str, float]],
-    left: float,
+    time_x: Callable[[float, bool], float],
     bottom: float,
-    width: float,
     height: float,
     t_min: float,
     t_max: float,
+    break_time: float | None,
     annotate: bool = True,
 ) -> None:
     """Рисует зоны режимов и границы между ними на одном графике."""
+
+    def intervals(start: float, end: float) -> list[tuple[float, float, bool]]:
+        if break_time is None or not start < break_time < end:
+            return [(start, end, start >= (break_time or math.inf))]
+        return [
+            (start, break_time, False),
+            (break_time, end, True),
+        ]
+
     for mode, mode_start, mode_end in mode_bounds(points):
         start = max(t_min, mode_start)
         end = min(t_max, mode_end)
         if end < start:
             continue
-        x1 = left + (start - t_min) / (t_max - t_min) * width
-        x2 = left + (end - t_min) / (t_max - t_min) * width
-        pdf.setFillColor(MODE_FILL[mode])
-        pdf.rect(x1, bottom, max(0.1, x2 - x1), height, fill=1, stroke=0)
-        if annotate and x2 - x1 > 24:
-            pdf.setFillColor(MODE_LINE[mode])
-            pdf.setFont(FONT, 5.5)
-            pdf.drawCentredString((x1 + x2) / 2.0, bottom + height - 9,
-                                  MODE_NAMES[mode])
+        for segment_start, segment_end, right_side in intervals(start, end):
+            x1 = time_x(segment_start, right_at_break=right_side)
+            x2 = time_x(segment_end, right_at_break=segment_end > (break_time or math.inf))
+            pdf.setFillColor(MODE_FILL[mode])
+            pdf.rect(x1, bottom, max(0.1, x2 - x1), height, fill=1, stroke=0)
+            if annotate and x2 - x1 > 24:
+                pdf.setFillColor(MODE_LINE[mode])
+                pdf.setFont(FONT, 5.5)
+                pdf.drawCentredString((x1 + x2) / 2.0, bottom + height - 9,
+                                      MODE_NAMES[mode])
 
     pdf.setStrokeColor(colors.HexColor("#7F7F7F"))
     pdf.setLineWidth(0.65)
     pdf.setDash(2, 2)
     for _, _, mode_end in mode_bounds(points)[:-1]:
         if t_min <= mode_end <= t_max:
-            x = left + (mode_end - t_min) / (t_max - t_min) * width
+            x = time_x(mode_end, right_at_break=mode_end > (break_time or math.inf))
             pdf.line(x, bottom, x, bottom + height)
     pdf.setDash()
 
@@ -390,14 +433,26 @@ def draw_series(
     color: colors.Color,
     left: float,
     bottom: float,
-    width: float,
+    time_x: Callable[[float, bool], float],
     height: float,
     t_min: float,
     t_max: float,
+    break_time: float | None,
     y_min: float,
     y_max: float,
 ) -> None:
     """Рисует ряд отдельными сегментами, не соединяя разные режимы."""
+
+    def draw_line(t1: float, v1: float, t2: float, v2: float,
+                  right_t1: bool = False, right_t2: bool = False) -> None:
+        x1 = time_x(t1, right_at_break=right_t1)
+        x2 = time_x(t2, right_at_break=right_t2)
+        y1 = bottom + (v1 - y_min) / (y_max - y_min) * height
+        y2 = bottom + (v2 - y_min) / (y_max - y_min) * height
+        pdf.line(x1, y1, x2, y2)
+
+    pdf.setStrokeColor(color)
+    pdf.setLineWidth(1.0)
     for index in range(len(points) - 1):
         p1 = points[index]
         p2 = points[index + 1]
@@ -405,15 +460,25 @@ def draw_series(
         v2 = p2.get(key)
         if v1 is None or v2 is None or not math.isfinite(v1) or not math.isfinite(v2):
             continue
-        x1 = left + (p1["t"] - t_min) / (t_max - t_min) * width
-        x2 = left + (p2["t"] - t_min) / (t_max - t_min) * width
-        y1 = bottom + (v1 - y_min) / (y_max - y_min) * height
-        y2 = bottom + (v2 - y_min) / (y_max - y_min) * height
-        # Цвет ряда сохраняется для различения серий, а фон и границы
-        # режима однозначно показывают принадлежность участка полёта.
-        pdf.setStrokeColor(color)
-        pdf.setLineWidth(1.0)
-        pdf.line(x1, y1, x2, y2)
+        t1 = p1["t"]
+        t2 = p2["t"]
+
+        # Не соединяем линией левую и правую части разорванной шкалы.
+        # Вместо этого добавляем интерполированную точку на границе 10 с.
+        if break_time is not None and t1 < break_time < t2:
+            fraction = (break_time - t1) / (t2 - t1)
+            value_at_break = v1 + fraction * (v2 - v1)
+            draw_line(t1, v1, break_time, value_at_break)
+            draw_line(break_time, value_at_break, t2, v2,
+                      right_t1=True)
+        elif break_time is not None and t1 == break_time and t2 > break_time:
+            draw_line(t1, v1, t2, v2, right_t1=True)
+        elif break_time is not None and t2 == break_time and t1 < break_time:
+            draw_line(t1, v1, t2, v2)
+        else:
+            draw_line(t1, v1, t2, v2,
+                      right_t1=break_time is not None and t1 > break_time,
+                      right_t2=break_time is not None and t2 > break_time)
 
 
 def draw_plot_area(
@@ -430,14 +495,17 @@ def draw_plot_area(
     t_max: float,
     y_min: float | None = None,
     y_max: float | None = None,
-    inset: bool = False,
 ) -> None:
-    left = x + (30 if inset else 45)
-    bottom = y + (18 if inset else 30)
-    chart_width = width - (38 if inset else 58)
-    chart_height = height - (30 if inset else 55)
+    left = x + 45
+    bottom = y + 30
+    chart_width = width - 58
+    chart_height = height - 55
     if t_max <= t_min:
         t_max = t_min + 1.0
+
+    time_x, break_time, break_left, break_right = build_time_scale(
+        left, chart_width, t_min, t_max
+    )
 
     all_values = [
         point[key]
@@ -462,15 +530,29 @@ def draw_plot_area(
         y_max += margin
 
     plot_points = [p for p in points if t_min <= p["t"] <= t_max]
-    draw_mode_background(pdf, plot_points, left, bottom, chart_width,
-                         chart_height, t_min, t_max, annotate=not inset)
+    draw_mode_background(pdf, plot_points, time_x, bottom, chart_height,
+                         t_min, t_max, break_time)
 
     pdf.setStrokeColor(colors.HexColor("#B7C9D6"))
     pdf.setLineWidth(0.3)
     for i in range(6):
         gy = bottom + chart_height * i / 5
-        pdf.line(left, gy, left + chart_width, gy)
-        gx = left + chart_width * i / 5
+        if break_left is None or break_right is None:
+            pdf.line(left, gy, left + chart_width, gy)
+        else:
+            pdf.line(left, gy, break_left, gy)
+            pdf.line(break_right, gy, left + chart_width, gy)
+
+    if break_time is None:
+        time_ticks = [t_min + (t_max - t_min) * i / 5 for i in range(6)]
+    else:
+        time_ticks = [break_time * i / 5 for i in range(6)]
+        time_ticks.extend(
+            break_time + (t_max - break_time) * i / 5
+            for i in range(1, 6)
+        )
+    for tick in time_ticks:
+        gx = time_x(tick, right_at_break=False)
         pdf.line(gx, bottom, gx, bottom + chart_height)
     # Вертикальная ось проходит через t=0. Если диапазон ординат включает
     # отрицательные значения, горизонтальная ось переносится на y=0, чтобы
@@ -482,47 +564,67 @@ def draw_plot_area(
     if y_min <= 0.0 <= y_max:
         zero_y = bottom + (0.0 - y_min) / (y_max - y_min) * chart_height
         pdf.setLineWidth(1.0)
-        pdf.line(left, zero_y, left + chart_width, zero_y)
+        if break_left is None or break_right is None:
+            pdf.line(left, zero_y, left + chart_width, zero_y)
+        else:
+            pdf.line(left, zero_y, break_left, zero_y)
+            pdf.line(break_right, zero_y, left + chart_width, zero_y)
     else:
-        pdf.line(left, bottom, left + chart_width, bottom)
+        if break_left is None or break_right is None:
+            pdf.line(left, bottom, left + chart_width, bottom)
+        else:
+            pdf.line(left, bottom, break_left, bottom)
+            pdf.line(break_right, bottom, left + chart_width, bottom)
+
+    # Диагональные отметки показывают разрыв единой оси времени.
+    if break_left is not None and break_right is not None:
+        axis_y = zero_y if zero_y is not None else bottom
+        for break_x in (break_left, break_right):
+            pdf.setLineWidth(0.9)
+            pdf.line(break_x - 2.0, axis_y - 3.0,
+                     break_x + 2.0, axis_y + 3.0)
 
     pdf.setFillColor(colors.black)
-    pdf.setFont(FONT_BOLD, 8 if not inset else 5.5)
-    pdf.drawString(x, y + height - (10 if not inset else 7), title)
-    pdf.setFont(FONT, 6.0 if not inset else 4.5)
+    pdf.setFont(FONT_BOLD, 8)
+    pdf.drawString(x, y + height - 10, title)
+    pdf.setFont(FONT, 6.0)
     for i in range(6):
         value = y_min + (y_max - y_min) * i / 5
-        label_y = bottom + chart_height * i / 5 - (2 if not inset else 1)
-        if not inset:
-            pdf.drawRightString(left - 4, label_y, fmt(value))
-        time_value = t_min + (t_max - t_min) * i / 5
-        pdf.drawCentredString(left + chart_width * i / 5,
-                              (zero_y if zero_y is not None else bottom) -
-                              (11 if not inset else 7),
-                              fmt(time_value, 1 if inset else 2))
-    if not inset:
-        x_axis_y = (zero_y if zero_y is not None else bottom) - 24
-        pdf.drawCentredString(left + chart_width / 2, x_axis_y, "t, с")
-        pdf.saveState()
-        pdf.translate(x + 9, bottom + chart_height / 2)
-        pdf.rotate(90)
-        pdf.drawCentredString(0, 0, y_label)
-        pdf.restoreState()
+        label_y = bottom + chart_height * i / 5 - 2
+        pdf.drawRightString(left - 4, label_y, fmt(value))
+
+    axis_label_y = (zero_y if zero_y is not None else bottom) - 18
+    for tick in time_ticks:
+        pdf.drawCentredString(time_x(tick, right_at_break=False), axis_label_y,
+                              fmt(tick, 1 if tick <= 10 else 2))
+    pdf.drawCentredString(left + chart_width / 2, y + 5, "t, с")
+    pdf.saveState()
+    pdf.translate(x + 9, bottom + chart_height / 2)
+    pdf.rotate(90)
+    pdf.drawCentredString(0, 0, y_label)
+    pdf.restoreState()
+
+    if break_left is not None and break_right is not None:
+        pdf.setFont(FONT, 5.2)
+        pdf.drawCentredString((left + break_left) / 2,
+                              bottom + chart_height + 2, "0–10 с")
+        pdf.drawCentredString((break_right + left + chart_width) / 2,
+                              bottom + chart_height + 2,
+                              f"10–{fmt(t_max, 0)} с")
 
     for name, key, color in series:
-        draw_series(pdf, plot_points, key, color, left, bottom, chart_width,
-                    chart_height, t_min, t_max, y_min, y_max)
+        draw_series(pdf, plot_points, key, color, left, bottom, time_x,
+                    chart_height, t_min, t_max, break_time, y_min, y_max)
 
-    if not inset:
-        legend_x = left + 5
-        legend_y = bottom + chart_height - 12
-        pdf.setFont(FONT, 5.8)
-        for name, _, color in series:
-            pdf.setStrokeColor(color)
-            pdf.line(legend_x, legend_y + 2, legend_x + 13, legend_y + 2)
-            pdf.setFillColor(colors.black)
-            pdf.drawString(legend_x + 16, legend_y, name)
-            legend_x += 16 + pdfmetrics.stringWidth(name, FONT, 5.8) + 10
+    legend_x = left + 5
+    legend_y = bottom + chart_height - 12
+    pdf.setFont(FONT, 5.8)
+    for name, _, color in series:
+        pdf.setStrokeColor(color)
+        pdf.line(legend_x, legend_y + 2, legend_x + 13, legend_y + 2)
+        pdf.setFillColor(colors.black)
+        pdf.drawString(legend_x + 16, legend_y, name)
+        legend_x += 16 + pdfmetrics.stringWidth(name, FONT, 5.8) + 10
 
 
 def draw_chart(
@@ -538,26 +640,10 @@ def draw_chart(
 ) -> None:
     t_min = points[0]["t"]
     t_max = points[-1]["t"]
-    # Полный диапазон занимает всё поле зависимости, а первые 10 секунд
-    # показываются вложенным окном внутри того же поля графика.
-    zoom_end = min(10.0, t_max)
+    # Одна зависимость рисуется в одном поле с неравномерной шкалой времени:
+    # первые 10 секунд расширены слева, а остальной диапазон расположен справа.
     draw_plot_area(pdf, points, x, y, width, height, title, y_label, series,
                    t_min, t_max)
-
-    inset_width = width * 0.42
-    inset_height = height * 0.42
-    inset_x = x + width - inset_width - 9.0
-    inset_y = y + height - inset_height - 24.0
-
-    # Белая подложка отделяет увеличенное окно от линии полного графика,
-    # не превращая его в отдельную зависимость или соседнюю панель.
-    pdf.setFillColor(colors.white)
-    pdf.setStrokeColor(colors.HexColor("#425563"))
-    pdf.setLineWidth(0.8)
-    pdf.rect(inset_x, inset_y, inset_width, inset_height, fill=1, stroke=1)
-    draw_plot_area(pdf, points, inset_x, inset_y, inset_width, inset_height,
-                   "Первые 10 с", y_label, series, 0.0, zoom_end,
-                   inset=True)
 
 
 def draw_graph_page(
