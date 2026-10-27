@@ -93,6 +93,9 @@ struct BalTrajectoryPoint
     double mu_summ = 0.0;
     double mu_0 = 0.0;
     double mu_1 = 0.0;
+    // Накопленная относительная масса израсходованного топлива: от 0
+    // в начале полёта до mu_summ после полного выгорания топлива.
+    double fuel_burned_relative = 0.0;
     // 0 — подготовительный, 1 — стартовый, 2 — маршевый режим.
     int flight_mode = 0;
 };

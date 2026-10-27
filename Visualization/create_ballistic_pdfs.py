@@ -144,10 +144,19 @@ def load_trajectory() -> list[dict[str, float]]:
         )
     with TRAJECTORY_FILE.open("r", encoding="utf-8") as file:
         reader = csv.DictReader(file, delimiter="\t")
-        return [
+        points = [
             {key: float(value) for key, value in row.items() if key and value}
             for row in reader
         ]
+        # Поддержка старых временных рядов: до появления отдельного поля
+        # накопленное выгорание восстанавливается из максимального остатка.
+        if points and "fuel_burned_relative" not in points[0]:
+            initial_fuel = max(point.get("mu_summ", 0.0) for point in points)
+            for point in points:
+                point["fuel_burned_relative"] = max(
+                    0.0, initial_fuel - point.get("mu_summ", initial_fuel)
+                )
+        return points
 
 
 def downsample(
@@ -463,10 +472,19 @@ def draw_plot_area(
         pdf.line(left, gy, left + chart_width, gy)
         gx = left + chart_width * i / 5
         pdf.line(gx, bottom, gx, bottom + chart_height)
+    # Вертикальная ось проходит через t=0. Если диапазон ординат включает
+    # отрицательные значения, горизонтальная ось переносится на y=0, чтобы
+    # начало координат оставалось видимым, а не совпадало с нижней рамкой.
     pdf.setStrokeColor(colors.HexColor("#425563"))
     pdf.setLineWidth(0.75)
     pdf.line(left, bottom, left, bottom + chart_height)
-    pdf.line(left, bottom, left + chart_width, bottom)
+    zero_y: float | None = None
+    if y_min <= 0.0 <= y_max:
+        zero_y = bottom + (0.0 - y_min) / (y_max - y_min) * chart_height
+        pdf.setLineWidth(1.0)
+        pdf.line(left, zero_y, left + chart_width, zero_y)
+    else:
+        pdf.line(left, bottom, left + chart_width, bottom)
 
     pdf.setFillColor(colors.black)
     pdf.setFont(FONT_BOLD, 8 if not inset else 5.5)
@@ -479,10 +497,12 @@ def draw_plot_area(
             pdf.drawRightString(left - 4, label_y, fmt(value))
         time_value = t_min + (t_max - t_min) * i / 5
         pdf.drawCentredString(left + chart_width * i / 5,
-                              bottom - (11 if not inset else 7),
+                              (zero_y if zero_y is not None else bottom) -
+                              (11 if not inset else 7),
                               fmt(time_value, 1 if inset else 2))
     if not inset:
-        pdf.drawCentredString(left + chart_width / 2, y + 5, "t, с")
+        x_axis_y = (zero_y if zero_y is not None else bottom) - 24
+        pdf.drawCentredString(left + chart_width / 2, x_axis_y, "t, с")
         pdf.saveState()
         pdf.translate(x + 9, bottom + chart_height / 2)
         pdf.rotate(90)
@@ -518,21 +538,17 @@ def draw_chart(
 ) -> None:
     t_min = points[0]["t"]
     t_max = points[-1]["t"]
-    draw_plot_area(pdf, points, x, y, width, height, title, y_label, series,
-                   t_min, t_max)
-
-    # Увеличенное окно включает подготовительный и стартовый участки.
+    # Полный диапазон и увеличение первых 10 секунд находятся рядом в одном
+    # поле графика, поэтому увеличение не закрывает основной временной ряд.
     zoom_end = min(10.0, t_max)
-    inset_width = width * 0.43
-    inset_height = height * 0.43
-    inset_x = x + width - inset_width - 10
-    inset_y = y + height - inset_height - 26
-    pdf.setFillColor(colors.white)
-    pdf.setStrokeColor(colors.HexColor("#425563"))
-    pdf.setLineWidth(0.8)
-    pdf.rect(inset_x, inset_y, inset_width, inset_height, fill=1, stroke=1)
-    draw_plot_area(pdf, points, inset_x, inset_y, inset_width, inset_height,
-                   "Увеличение 0–10 с", y_label, series, 0.0, zoom_end,
+    gap = 8.0
+    zoom_width = width * 0.34
+    full_width = width - zoom_width - gap
+    draw_plot_area(pdf, points, x, y, full_width, height, title, y_label,
+                   series, t_min, t_max)
+    zoom_x = x + full_width + gap
+    draw_plot_area(pdf, points, zoom_x, y, zoom_width, height,
+                   "Первые 10 с", y_label, series, 0.0, zoom_end,
                    inset=True)
 
 
@@ -605,9 +621,7 @@ def create_graphs() -> None:
         pdf, points, "Масса и экспоненциальный расход топлива",
         [
             ("Относительная масса топлива", "μ", [
-                ("μ сумм", "mu_summ", blue),
-                ("μ старт", "mu_0", orange),
-                ("μ марш", "mu_1", green),
+                ("μ израсходованного топлива", "fuel_burned_relative", blue),
             ]),
             ("Масса ракеты", "m, кг", [("m", "mass_r", red)]),
             ("Остаток топлива", "m топлива, кг", [("топливо", "fuel_remaining", purple)]),

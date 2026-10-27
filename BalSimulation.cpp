@@ -135,7 +135,8 @@ void save_trajectory_file(const std::vector<BalTrajectoryPoint>& trajectory)
     std::ofstream file("flat_flight_trajectory.gra");
     file << "t\tx_g_r\ty_g_r\tv_r\tmach\tTheta_r\tn_xa_r\tn_ya_r"
          << "\tfuel_rate\tfuel_remaining\tP_r\tmass_r"
-         << "\tmu_summ\tmu_0\tmu_1\tflight_mode\n";
+         << "\tmu_summ\tmu_0\tmu_1\tfuel_burned_relative"
+         << "\tflight_mode\n";
     file << std::setprecision(12);
 
     for (const BalTrajectoryPoint& point : trajectory)
@@ -155,6 +156,7 @@ void save_trajectory_file(const std::vector<BalTrajectoryPoint>& trajectory)
              << point.mu_summ << "\t"
              << point.mu_0 << "\t"
              << point.mu_1 << "\t"
+             << point.fuel_burned_relative << "\t"
              << point.flight_mode << "\n";
     }
 }
@@ -296,6 +298,8 @@ BalSimulationResult run_bal_simulation(const BalSimulationConfig& config)
         point.mu_summ = point.fuel_remaining / p.m0;
         point.mu_0 = std::max(0.0, mu_start_remaining);
         point.mu_1 = std::max(0.0, mu_march_remaining);
+        point.fuel_burned_relative = std::clamp(
+            p.mu_summ - point.mu_summ, 0.0, p.mu_summ);
         point.flight_mode = mode;
         result.trajectory.push_back(point);
     };
