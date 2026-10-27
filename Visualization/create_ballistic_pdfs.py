@@ -538,16 +538,24 @@ def draw_chart(
 ) -> None:
     t_min = points[0]["t"]
     t_max = points[-1]["t"]
-    # Полный диапазон и увеличение первых 10 секунд находятся рядом в одном
-    # поле графика, поэтому увеличение не закрывает основной временной ряд.
+    # Полный диапазон занимает всё поле зависимости, а первые 10 секунд
+    # показываются вложенным окном внутри того же поля графика.
     zoom_end = min(10.0, t_max)
-    gap = 8.0
-    zoom_width = width * 0.34
-    full_width = width - zoom_width - gap
-    draw_plot_area(pdf, points, x, y, full_width, height, title, y_label,
-                   series, t_min, t_max)
-    zoom_x = x + full_width + gap
-    draw_plot_area(pdf, points, zoom_x, y, zoom_width, height,
+    draw_plot_area(pdf, points, x, y, width, height, title, y_label, series,
+                   t_min, t_max)
+
+    inset_width = width * 0.42
+    inset_height = height * 0.42
+    inset_x = x + width - inset_width - 9.0
+    inset_y = y + height - inset_height - 24.0
+
+    # Белая подложка отделяет увеличенное окно от линии полного графика,
+    # не превращая его в отдельную зависимость или соседнюю панель.
+    pdf.setFillColor(colors.white)
+    pdf.setStrokeColor(colors.HexColor("#425563"))
+    pdf.setLineWidth(0.8)
+    pdf.rect(inset_x, inset_y, inset_width, inset_height, fill=1, stroke=1)
+    draw_plot_area(pdf, points, inset_x, inset_y, inset_width, inset_height,
                    "Первые 10 с", y_label, series, 0.0, zoom_end,
                    inset=True)
 
