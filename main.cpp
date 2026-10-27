@@ -1411,10 +1411,9 @@ int main()
     rocket.m0_start = m_pn / (1.0 - rocket.beta * mu_fixed);
 
     // === НОВЫЙ РАСЧЁТ ПРЯМОЛИНЕЙНОГО ПОЛЁТА ===
-    // Массовая модель и идеализированная двухучастковая траектория
+    // Массовая модель и идеализированная трёхрежимная траектория
     // реализованы в отдельном модуле BalSimulation.
     BalSimulationConfig bal_config;
-    bal_config.diameter = rocket.d;
     BalSimulationResult bal_result = run_bal_simulation(bal_config);
     print_bal_simulation_report(bal_config, bal_result);
     save_bal_simulation_outputs(bal_config, bal_result);
