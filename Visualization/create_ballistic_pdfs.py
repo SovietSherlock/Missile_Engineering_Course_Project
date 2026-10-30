@@ -29,8 +29,10 @@ GRAPHS_FILE = SOURCES / "Графики прямолинейного полёт�
 
 PAGE = landscape(A4)
 PAGE_WIDTH, PAGE_HEIGHT = PAGE
-FONT = "Arial"
-FONT_BOLD = "Arial-Bold"
+FONT = "TimesNewRoman"
+FONT_BOLD = "TimesNewRoman-Bold"
+FONT_ITALIC = "TimesNewRoman-Italic"
+FONT_BOLD_ITALIC = "TimesNewRoman-BoldItalic"
 
 MODE_NAMES = {
     0: "Подготовительный",
@@ -52,16 +54,69 @@ MODE_LINE = {
 def register_fonts() -> None:
     """Регистрирует шрифт с кириллицей на Windows и Linux."""
     candidates = [
-        ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"),
-        ("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"),
+        (
+            "C:/Windows/Fonts/times.ttf",
+            "C:/Windows/Fonts/timesbd.ttf",
+            "C:/Windows/Fonts/timesi.ttf",
+            "C:/Windows/Fonts/timesbi.ttf",
+        ),
+        (
+            "/usr/share/fonts/truetype/liberation2/LiberationSerif-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSerif-Italic.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSerif-BoldItalic.ttf",
+        ),
     ]
-    for regular, bold in candidates:
-        if os.path.exists(regular) and os.path.exists(bold):
+    for regular, bold, italic, bold_italic in candidates:
+        if all(os.path.exists(path) for path in
+               (regular, bold, italic, bold_italic)):
             pdfmetrics.registerFont(TTFont(FONT, regular))
             pdfmetrics.registerFont(TTFont(FONT_BOLD, bold))
+            pdfmetrics.registerFont(TTFont(FONT_ITALIC, italic))
+            pdfmetrics.registerFont(TTFont(FONT_BOLD_ITALIC, bold_italic))
             return
-    raise FileNotFoundError("Не найден шрифт с поддержкой кириллицы")
+    raise FileNotFoundError(
+        "Не найден Times New Roman с поддержкой кириллицы"
+    )
+
+
+def draw_mixed_centered(
+    pdf: canvas.Canvas,
+    segments: Sequence[tuple[str, str]],
+    center_x: float,
+    y: float,
+    size: float,
+) -> None:
+    """Рисует подпись с разными начертаниями в стиле математических осей."""
+    total_width = sum(
+        pdfmetrics.stringWidth(text, font, size)
+        for text, font in segments
+    )
+    cursor = center_x - total_width / 2.0
+    for text, font in segments:
+        pdf.setFont(font, size)
+        pdf.drawString(cursor, y, text)
+        cursor += pdfmetrics.stringWidth(text, font, size)
+
+
+def axis_label_segments(label: str) -> list[tuple[str, str]]:
+    """Разделяет осевые подписи на математические и русские фрагменты."""
+    labels = {
+        "x, м": [("x", FONT_ITALIC), (", м", FONT)],
+        "y, м": [("y", FONT_ITALIC), (", м", FONT)],
+        "v, м/с": [("v", FONT_ITALIC), (", м/с", FONT)],
+        "M": [("M", FONT_ITALIC)],
+        "μ": [("μ", FONT_ITALIC)],
+        "m, кг": [("m", FONT_ITALIC), (", кг", FONT)],
+        "m топлива, кг": [("m", FONT_ITALIC), (" топлива, кг", FONT)],
+        "G, кг/с": [("G", FONT_ITALIC), (", кг/с", FONT)],
+        "P, Н": [("P", FONT_ITALIC), (", Н", FONT)],
+        "nₓₐ": [("nₓₐ", FONT_ITALIC)],
+        "nᵧₐ": [("nᵧₐ", FONT_ITALIC)],
+        "режим": [("режим", FONT)],
+        "t, с": [("t", FONT_ITALIC), (", с", FONT)],
+    }
+    return labels.get(label, [(label, FONT)])
 
 
 def wrap_text(text: str, font: str, size: float, width: float) -> list[str]:
@@ -96,6 +151,7 @@ def draw_wrapped(
 ) -> float:
     """Рисует переносимый текст и возвращает координату после блока."""
     for line in wrap_text(text, font, size, width):
+        pdf.setFont(font, size)
         pdf.drawString(x, y, line)
         y -= leading
     return y
@@ -116,6 +172,7 @@ def draw_centered_wrapped(
     total_height = len(lines) * leading
     text_y = y + (height + total_height) / 2.0 - leading
     for line in lines:
+        pdf.setFont(font, size)
         line_width = pdfmetrics.stringWidth(line, font, size)
         pdf.drawString(x + (width - line_width) / 2.0, text_y, line)
         text_y -= leading
@@ -179,6 +236,15 @@ def fmt(value: float, digits: int = 2) -> str:
     return f"{value:.{digits}f}".replace(".", ",")
 
 
+def axis_digits(step: float) -> int:
+    """Определяет число знаков для подписей делений ординаты."""
+    if step >= 1.0:
+        return 0
+    if step >= 0.1:
+        return 1
+    return 2
+
+
 def approx(value: float, digits: int = 3) -> str:
     return f"≈ {fmt(value, digits)} (Оценочно)"
 
@@ -238,7 +304,7 @@ def create_results_table() -> None:
     pdf.setFont(FONT, 7.5)
     pdf.drawCentredString(
         PAGE_WIDTH / 2, PAGE_HEIGHT - 41,
-        "Трёхрежимный авиационный запуск и расчёт калибра по нагрузке на мидель П-800",
+        "Трёхрежимный авиационный запуск и принудительно заданный калибр ракеты",
     )
 
     top = PAGE_HEIGHT - 53.0
@@ -276,8 +342,10 @@ def create_results_table() -> None:
             x += width
         pdf.setFillColor(colors.black)
         x = table_x
-        draw_wrapped(pdf, row[0], x + 4, y - 10, column_widths[0] - 8,
-                     FONT, 6.5, 7.5)
+        draw_centered_wrapped(
+            pdf, row[0], x, y - row_height, column_widths[0], row_height,
+            FONT, 6.5, 7.5,
+        )
         x += column_widths[0]
         for text, width, lines in zip(row[1:], column_widths[1:], value_lines):
             text_y = y - (row_height + len(lines) * 7.5) / 2.0 + 7.5
@@ -310,7 +378,7 @@ def create_results_table() -> None:
         "Масса обобщённой полезной нагрузки mпр.п.н.=375 кг. В массовом уравнении используются отдельные β0=1,30 и β1=1,20; в основном отчёте β означает β0.",
         "Масса топлива на стартовом и маршевом участках изменяется экспоненциально. Маршевая тяга определяется текущим расходом топлива, а Kp — по средней маршевой тяге.",
         "Нагрузка на мидель проектируемой ракеты приравнена к нагрузке авиационного П-800: mref=2500 кг, dref=0,67 м, q_m0=69537,84 Н/м².",
-        "Калибр определяется после расчёта стартовой массы: S_m=m0·g/q_m0, d=sqrt(4·S_m/π). График оптимизации q_m1(q_m0) из расчёта исключён полностью.",
+        "Калибр проектируемой ракеты принудительно задан d=0,65 м; площадь миделя и q_m0 пересчитаны для этого калибра. График оптимизации q_m1(q_m0) исключён.",
         "Значения в колонках Х-35У и П-800, отмеченные «Оценочно», получены по открытым данным и инженерным допущениям и не являются паспортными характеристиками.",
     ]
     for note in notes:
@@ -379,6 +447,105 @@ def build_time_scale(
     return broken_time_x, break_time, break_left, break_right
 
 
+def choose_tick_step(data_min: float, data_max: float) -> float:
+    """Выбирает удобный единичный отрезок из согласованного ряда чисел."""
+    span = max(data_max, 0.0) - min(data_min, 0.0)
+    raw_step = max(span / 5.0, 0.05)
+    base_steps = [0.05, 0.1, 0.5, 1.0, 5.0, 10.0,
+                  50.0, 100.0, 500.0, 1000.0, 2500.0, 5000.0]
+    candidates = sorted({
+        base * (10.0 ** exponent)
+        for base in base_steps
+        for exponent in range(0, 8)
+    })
+    lower_candidates = [step for step in candidates if step <= raw_step]
+    return lower_candidates[-1] if lower_candidates else candidates[0]
+
+
+def build_value_scale(
+    bottom: float,
+    height: float,
+    values: Sequence[float],
+) -> dict[str, object]:
+    """Строит шкалу ординат от нуля с заданным разрывом больших значений."""
+    data_min = min(values)
+    data_max = max(values)
+    step = choose_tick_step(data_min, data_max)
+
+    axis_min = 0.0 if data_min >= 0.0 else math.floor(data_min / step) * step
+    axis_max = math.ceil(data_max / step) * step
+    if math.isclose(axis_min, axis_max):
+        axis_max = axis_min + step
+
+    # Если данные удалены от нуля более чем на два единичных отрезка,
+    # удалённая часть оси заменяется горизонтальным разрывом.
+    has_break = (
+        data_min > 2.0 * step and
+        data_min - 0.5 * step > 1.25 * step
+    )
+    break_low = 1.25 * step if has_break else None
+    break_high = data_min - 0.5 * step if has_break else None
+
+    if has_break:
+        lower_height = height * 0.20
+        gap_height = height * 0.08
+        upper_height = height - lower_height - gap_height
+
+        def value_y(value: float) -> float:
+            if value <= break_low:
+                return bottom + value / break_low * lower_height
+            return (bottom + lower_height + gap_height +
+                    (value - break_high) / (axis_max - break_high) *
+                    upper_height)
+
+        tick_values = [
+            index * step
+            for index in range(0, math.floor(break_low / step) + 1)
+        ]
+        upper_first = math.ceil(break_high / step) * step
+        tick_values.extend(
+            upper_first + index * step
+            for index in range(
+                0,
+                math.floor((axis_max - upper_first) / step + 1e-9) + 1,
+            )
+        )
+        return {
+            "map": value_y,
+            "min": axis_min,
+            "max": axis_max,
+            "step": step,
+            "ticks": tick_values,
+            "has_break": True,
+            "break_low_y": bottom + lower_height,
+            "break_high_y": bottom + lower_height + gap_height,
+            "zero_y": value_y(0.0),
+        }
+
+    def value_y(value: float) -> float:
+        return bottom + (value - axis_min) / (axis_max - axis_min) * height
+
+    first_tick = math.ceil(axis_min / step) * step
+    tick_values = [
+        first_tick + index * step
+        for index in range(
+            0,
+            math.floor((axis_max - first_tick) / step + 1e-9) + 1,
+        )
+    ]
+    return {
+        "map": value_y,
+        "min": axis_min,
+        "max": axis_max,
+        "step": step,
+        "ticks": tick_values,
+        "has_break": False,
+        "break_low_y": None,
+        "break_high_y": None,
+        "zero_y": value_y(0.0) if axis_min <= 0.0 <= axis_max else None,
+    }
+
+
 def draw_mode_background(
     pdf: canvas.Canvas,
     points: Sequence[dict[str, float]],
@@ -388,9 +555,8 @@ def draw_mode_background(
     t_min: float,
     t_max: float,
     break_time: float | None,
-    annotate: bool = True,
 ) -> None:
-    """Рисует зоны режимов и границы между ними на одном графике."""
+    """Рисует цветовые зоны режимов без текстовых подписей."""
 
     def intervals(start: float, end: float) -> list[tuple[float, float, bool]]:
         if break_time is None or not start < break_time < end:
@@ -410,11 +576,6 @@ def draw_mode_background(
             x2 = time_x(segment_end, right_at_break=segment_end > (break_time or math.inf))
             pdf.setFillColor(MODE_FILL[mode])
             pdf.rect(x1, bottom, max(0.1, x2 - x1), height, fill=1, stroke=0)
-            if annotate and x2 - x1 > 24:
-                pdf.setFillColor(MODE_LINE[mode])
-                pdf.setFont(FONT, 5.5)
-                pdf.drawCentredString((x1 + x2) / 2.0, bottom + height - 9,
-                                      MODE_NAMES[mode])
 
     pdf.setStrokeColor(colors.HexColor("#7F7F7F"))
     pdf.setLineWidth(0.65)
@@ -431,24 +592,20 @@ def draw_series(
     points: Sequence[dict[str, float]],
     key: str,
     color: colors.Color,
-    left: float,
     bottom: float,
     time_x: Callable[[float, bool], float],
-    height: float,
-    t_min: float,
-    t_max: float,
+    value_scale: dict[str, object],
     break_time: float | None,
-    y_min: float,
-    y_max: float,
 ) -> None:
     """Рисует ряд отдельными сегментами, не соединяя разные режимы."""
+    value_y = value_scale["map"]
 
     def draw_line(t1: float, v1: float, t2: float, v2: float,
                   right_t1: bool = False, right_t2: bool = False) -> None:
         x1 = time_x(t1, right_at_break=right_t1)
         x2 = time_x(t2, right_at_break=right_t2)
-        y1 = bottom + (v1 - y_min) / (y_max - y_min) * height
-        y2 = bottom + (v2 - y_min) / (y_max - y_min) * height
+        y1 = value_y(v1)
+        y2 = value_y(v2)
         pdf.line(x1, y1, x2, y2)
 
     pdf.setStrokeColor(color)
@@ -479,6 +636,20 @@ def draw_series(
             draw_line(t1, v1, t2, v2,
                       right_t1=break_time is not None and t1 > break_time,
                       right_t2=break_time is not None and t2 > break_time)
+
+    if points:
+        endpoint = points[-1]
+        endpoint_value = endpoint.get(key)
+        if endpoint_value is not None and math.isfinite(endpoint_value):
+            endpoint_x = time_x(
+                endpoint["t"],
+                right_at_break=break_time is not None and
+                endpoint["t"] > break_time,
+            )
+            pdf.setFillColor(color)
+            pdf.setStrokeColor(color)
+            pdf.circle(endpoint_x, value_y(endpoint_value), 2.2,
+                       stroke=1, fill=1)
 
 
 def draw_plot_area(
@@ -516,18 +687,15 @@ def draw_plot_area(
     ]
     if not all_values:
         return
-    if y_min is None:
-        y_min = min(all_values)
-    if y_max is None:
-        y_max = max(all_values)
-    if math.isclose(y_min, y_max):
-        margin = max(1.0, abs(y_min) * 0.05)
-        y_min -= margin
-        y_max += margin
+    if y_min is not None or y_max is not None:
+        scale_values = [
+            min(all_values) if y_min is None else y_min,
+            max(all_values) if y_max is None else y_max,
+        ]
     else:
-        margin = (y_max - y_min) * 0.08
-        y_min -= margin
-        y_max += margin
+        scale_values = all_values
+    value_scale = build_value_scale(bottom, chart_height, scale_values)
+    value_y = value_scale["map"]
 
     plot_points = [p for p in points if t_min <= p["t"] <= t_max]
     draw_mode_background(pdf, plot_points, time_x, bottom, chart_height,
@@ -535,11 +703,14 @@ def draw_plot_area(
 
     pdf.setStrokeColor(colors.HexColor("#B7C9D6"))
     pdf.setLineWidth(0.3)
-    for i in range(6):
-        gy = bottom + chart_height * i / 5
+    for tick in value_scale["ticks"]:
+        gy = value_y(tick)
         if break_left is None or break_right is None:
             pdf.line(left, gy, left + chart_width, gy)
         else:
+            if (value_scale["has_break"] and
+                    value_scale["break_low_y"] < gy < value_scale["break_high_y"]):
+                continue
             pdf.line(left, gy, break_left, gy)
             pdf.line(break_right, gy, left + chart_width, gy)
 
@@ -554,67 +725,74 @@ def draw_plot_area(
     for tick in time_ticks:
         gx = time_x(tick, right_at_break=False)
         pdf.line(gx, bottom, gx, bottom + chart_height)
-    # Вертикальная ось проходит через t=0. Если диапазон ординат включает
-    # отрицательные значения, горизонтальная ось переносится на y=0, чтобы
-    # начало координат оставалось видимым, а не совпадало с нижней рамкой.
+
+    # Белая полоса и диагональные отметки показывают горизонтальный разрыв
+    # шкалы ординат, если данные удалены от нуля.
+    if value_scale["has_break"]:
+        break_low_y = value_scale["break_low_y"]
+        break_high_y = value_scale["break_high_y"]
+        pdf.setFillColor(colors.white)
+        pdf.rect(left, break_low_y, chart_width,
+                 break_high_y - break_low_y, fill=1, stroke=0)
+
+    # Вертикальная ось проходит через t=0. Горизонтальная ось проходит через
+    # y=0; при положительных данных она совпадает с нижней границей поля.
     pdf.setStrokeColor(colors.HexColor("#425563"))
     pdf.setLineWidth(0.75)
-    pdf.line(left, bottom, left, bottom + chart_height)
-    zero_y: float | None = None
-    if y_min <= 0.0 <= y_max:
-        zero_y = bottom + (0.0 - y_min) / (y_max - y_min) * chart_height
-        pdf.setLineWidth(1.0)
-        if break_left is None or break_right is None:
-            pdf.line(left, zero_y, left + chart_width, zero_y)
-        else:
-            pdf.line(left, zero_y, break_left, zero_y)
-            pdf.line(break_right, zero_y, left + chart_width, zero_y)
+    if value_scale["has_break"]:
+        pdf.line(left, bottom, left, value_scale["break_low_y"])
+        pdf.line(left, value_scale["break_high_y"],
+                 left, bottom + chart_height)
     else:
-        if break_left is None or break_right is None:
-            pdf.line(left, bottom, left + chart_width, bottom)
-        else:
-            pdf.line(left, bottom, break_left, bottom)
-            pdf.line(break_right, bottom, left + chart_width, bottom)
+        pdf.line(left, bottom, left, bottom + chart_height)
+    zero_y = value_scale["zero_y"]
+    pdf.setLineWidth(1.0)
+    if break_left is None or break_right is None:
+        pdf.line(left, zero_y, left + chart_width, zero_y)
+    else:
+        pdf.line(left, zero_y, break_left, zero_y)
+        pdf.line(break_right, zero_y, left + chart_width, zero_y)
+
+    if value_scale["has_break"]:
+        for break_y in (value_scale["break_low_y"],
+                        value_scale["break_high_y"]):
+            for break_x in (left, left + chart_width):
+                pdf.setLineWidth(0.9)
+                pdf.line(break_x - 3.0, break_y - 2.0,
+                         break_x + 3.0, break_y + 2.0)
 
     # Диагональные отметки показывают разрыв единой оси времени.
     if break_left is not None and break_right is not None:
-        axis_y = zero_y if zero_y is not None else bottom
         for break_x in (break_left, break_right):
             pdf.setLineWidth(0.9)
-            pdf.line(break_x - 2.0, axis_y - 3.0,
-                     break_x + 2.0, axis_y + 3.0)
+            pdf.line(break_x - 2.0, zero_y - 3.0,
+                     break_x + 2.0, zero_y + 3.0)
 
     pdf.setFillColor(colors.black)
     pdf.setFont(FONT_BOLD, 8)
     pdf.drawString(x, y + height - 10, title)
     pdf.setFont(FONT, 6.0)
-    for i in range(6):
-        value = y_min + (y_max - y_min) * i / 5
-        label_y = bottom + chart_height * i / 5 - 2
-        pdf.drawRightString(left - 4, label_y, fmt(value))
+    for tick in value_scale["ticks"]:
+        pdf.drawRightString(
+            left - 4, value_y(tick) - 2,
+            fmt(tick, axis_digits(value_scale["step"])),
+        )
 
-    axis_label_y = (zero_y if zero_y is not None else bottom) - 18
+    axis_label_y = zero_y - 18
     for tick in time_ticks:
         pdf.drawCentredString(time_x(tick, right_at_break=False), axis_label_y,
-                              fmt(tick, 1 if tick <= 10 else 2))
-    pdf.drawCentredString(left + chart_width / 2, y + 5, "t, с")
+                              fmt(tick, 1 if tick <= 10 else 0))
+    draw_mixed_centered(pdf, axis_label_segments("t, с"),
+                        left + chart_width / 2, y + 5, 6.0)
     pdf.saveState()
     pdf.translate(x + 9, bottom + chart_height / 2)
     pdf.rotate(90)
-    pdf.drawCentredString(0, 0, y_label)
+    draw_mixed_centered(pdf, axis_label_segments(y_label), 0, 0, 6.0)
     pdf.restoreState()
 
-    if break_left is not None and break_right is not None:
-        pdf.setFont(FONT, 5.2)
-        pdf.drawCentredString((left + break_left) / 2,
-                              bottom + chart_height + 2, "0–10 с")
-        pdf.drawCentredString((break_right + left + chart_width) / 2,
-                              bottom + chart_height + 2,
-                              f"10–{fmt(t_max, 0)} с")
-
     for name, key, color in series:
-        draw_series(pdf, plot_points, key, color, left, bottom, time_x,
-                    chart_height, t_min, t_max, break_time, y_min, y_max)
+        draw_series(pdf, plot_points, key, color, bottom, time_x,
+                    value_scale, break_time)
 
     legend_x = left + 5
     legend_y = bottom + chart_height - 12
@@ -639,7 +817,9 @@ def draw_chart(
     series: Sequence[tuple[str, str, colors.Color]],
 ) -> None:
     t_min = points[0]["t"]
-    t_max = points[-1]["t"]
+    # Ось продолжается на 25 секунд после расчётной точки окончания полёта;
+    # правую границу округляем до целой секунды.
+    t_max = float(round(points[-1]["t"] + 25.0))
     # Одна зависимость рисуется в одном поле с неравномерной шкалой времени:
     # первые 10 секунд расширены слева, а остальной диапазон расположен справа.
     draw_plot_area(pdf, points, x, y, width, height, title, y_label, series,

@@ -99,6 +99,7 @@ bool calculate_geometry(
 {
     if (!finite_positive(config.reference_mass) ||
         !finite_positive(config.reference_diameter) ||
+        !finite_positive(config.diameter) ||
         !finite_positive(config.rocket_density))
     {
         return false;
@@ -109,11 +110,13 @@ bool calculate_geometry(
     parameters.reference_midship_load =
         config.reference_mass * g / parameters.reference_midship_area;
 
-    parameters.midship_load_start = parameters.reference_midship_load;
-    parameters.midship_area = parameters.m0 * g /
-        parameters.midship_load_start;
-    parameters.diameter = std::sqrt(
-        4.0 * parameters.midship_area / pi);
+    // После изменения ТЗ калибр фиксируется напрямую. Нагрузка на мидель
+    // проектируемой ракеты пересчитывается уже для назначенной площади.
+    parameters.diameter = config.diameter;
+    parameters.midship_area = pi * parameters.diameter *
+        parameters.diameter / 4.0;
+    parameters.midship_load_start = parameters.m0 * g /
+        parameters.midship_area;
     parameters.midship_load_march = parameters.midship_load_start *
         (1.0 - parameters.mu_start);
 
@@ -170,6 +173,7 @@ void save_summary_file(
     file << "Показатель\tЗначение\tЕдиницы\n";
     file << std::setprecision(12)
          << "m0\t" << p.m0 << "\tкг\n"
+         << "Hi (коэффициент потерь)\t" << config.loss_factor << "\t-\n"
          << "beta_start\t" << p.beta_start << "\t-\n"
          << "beta_march\t" << p.beta_march << "\t-\n"
          << "mu_summ\t" << p.mu_summ << "\t-\n"
@@ -402,6 +406,8 @@ void print_bal_simulation_report(
     std::cout << std::fixed << std::setprecision(8);
     std::cout << "Режим подготовки                 "
               << config.preparation_duration << "       с\n"
+              << "Hi                              " << config.loss_factor
+              << "       -\n"
               << "beta_старт                      " << p.beta_start
               << "       -\n"
               << "beta_марш                       " << p.beta_march

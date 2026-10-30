@@ -17,7 +17,7 @@ struct BalSimulationConfig
     double start_specific_impulse = 2650.0;
     double march_specific_impulse = 2620.0;
     double start_duration = 5.0;
-    double loss_factor = 0.92;
+    double loss_factor = 0.89;
     double mu_summ_limit = 0.7;
     double payload_mass = 375.0;
     double beta_start = 1.30;
@@ -27,6 +27,8 @@ struct BalSimulationConfig
     // нагрузке авиационного варианта П-800 «Оникс».
     double reference_mass = 2500.0;
     double reference_diameter = 0.67;
+    // Калибр задаётся преподавателем напрямую и не выводится из q_m0.
+    double diameter = 0.65;
     double rocket_density = 1555.0;
     double integration_dt = 0.01;
 };
