@@ -322,7 +322,8 @@ BalSimulationResult run_bal_simulation(const BalSimulationConfig& config)
     }
 
     // Фиксируем точку начала стартового режима отдельно: это позволяет
-    // однозначно показать на графике границу t=3 с без временного зазора.
+    // однозначно показать на графике границу окончания подготовки без
+    // временного зазора.
     append_point(t, p.preparation_distance, v0, p.m0,
                  p.m0 * start_acceleration / effective_start_exhaust_velocity,
                  p.start_thrust, p.eta_0, p.mu_start, p.mu_march, 1);

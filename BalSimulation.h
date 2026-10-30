@@ -13,7 +13,7 @@ struct BalSimulationConfig
     double march_mach = 2.0;
     double target_range = 700000.0;
 
-    double preparation_duration = 3.0;
+    double preparation_duration = 0.75;
     double start_specific_impulse = 2650.0;
     double march_specific_impulse = 2620.0;
     double start_duration = 5.0;

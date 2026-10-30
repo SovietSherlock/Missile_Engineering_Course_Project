@@ -2,7 +2,8 @@
 
 Временной ряд формируется программой проекта в файле
 ``flat_flight_trajectory.gra``. Графики показывают подготовительный,
-стартовый и маршевый режимы, а также увеличенное окно первых секунд полёта.
+стартовый и маршевый режимы на единой разорванной шкале времени с
+увеличенным участком первых секунд полёта.
 """
 
 from __future__ import annotations
@@ -35,9 +36,9 @@ FONT_ITALIC = "TimesNewRoman-Italic"
 FONT_BOLD_ITALIC = "TimesNewRoman-BoldItalic"
 
 MODE_NAMES = {
-    0: "Подготовительный",
-    1: "Стартовый",
-    2: "Маршевый",
+    0: "Подготовительный режим",
+    1: "Стартовый режим",
+    2: "Маршевый режим",
 }
 MODE_FILL = {
     0: colors.HexColor("#EEEEEE"),
@@ -117,6 +118,62 @@ def axis_label_segments(label: str) -> list[tuple[str, str]]:
         "t, с": [("t", FONT_ITALIC), (", с", FONT)],
     }
     return labels.get(label, [(label, FONT)])
+
+
+def draw_marker(
+    pdf: canvas.Canvas,
+    marker: str,
+    x: float,
+    y: float,
+    color: colors.Color,
+    size: float = 3.2,
+) -> None:
+    """Рисует реперную точку графика заданным геометрическим знаком."""
+    pdf.saveState()
+    pdf.setStrokeColor(color)
+    pdf.setFillColor(color)
+    pdf.setLineWidth(0.8)
+    if marker == "square":
+        pdf.rect(x - size, y - size, 2 * size, 2 * size,
+                 stroke=1, fill=1)
+    elif marker == "triangle":
+        path = pdf.beginPath()
+        path.moveTo(x, y + size)
+        path.lineTo(x - size, y - size)
+        path.lineTo(x + size, y - size)
+        path.close()
+        pdf.drawPath(path, stroke=1, fill=1)
+    elif marker == "star":
+        path = pdf.beginPath()
+        for index in range(10):
+            angle = math.pi / 2.0 + index * math.pi / 5.0
+            radius = size if index % 2 == 0 else size * 0.42
+            point_x = x + radius * math.cos(angle)
+            point_y = y + radius * math.sin(angle)
+            if index == 0:
+                path.moveTo(point_x, point_y)
+            else:
+                path.lineTo(point_x, point_y)
+        path.close()
+        pdf.drawPath(path, stroke=1, fill=1)
+    else:
+        pdf.circle(x, y, size, stroke=1, fill=1)
+    pdf.restoreState()
+
+
+def reference_points(points: Sequence[dict[str, float]]) -> list[tuple[str, dict[str, float]]]:
+    """Возвращает точки пуска, включения стартового и маршевого двигателей."""
+    references: list[tuple[str, dict[str, float]]] = []
+    if points:
+        references.append(("square", points[0]))
+    for mode, marker in ((1, "star"), (2, "triangle")):
+        point = next(
+            (item for item in points if int(item.get("flight_mode", -1)) == mode),
+            None,
+        )
+        if point is not None:
+            references.append((marker, point))
+    return references
 
 
 def wrap_text(text: str, font: str, size: float, width: float) -> list[str]:
@@ -348,11 +405,10 @@ def create_results_table() -> None:
         )
         x += column_widths[0]
         for text, width, lines in zip(row[1:], column_widths[1:], value_lines):
-            text_y = y - (row_height + len(lines) * 7.5) / 2.0 + 7.5
-            for line in lines:
-                line_width = pdfmetrics.stringWidth(line, FONT, 6.5)
-                pdf.drawString(x + (width - line_width) / 2.0, text_y, line)
-                text_y -= 7.5
+            draw_centered_wrapped(
+                pdf, text, x, y - row_height, width, row_height,
+                FONT, 6.5, 7.5,
+            )
             x += width
         y -= row_height
 
@@ -373,7 +429,7 @@ def create_results_table() -> None:
     note_y = PAGE_HEIGHT - 53
     pdf.setFont(FONT, 7.0)
     notes = [
-        "Подготовительный режим длится 3 с: ракета сходит с пилона самолёта-носителя, двигатель не работает, масса и скорость постоянны.",
+        "Подготовительный режим длится 0,75 с: ракета сходит с пилона самолёта-носителя, двигатель не работает, масса и скорость постоянны.",
         "Стартовый режим длится 5 с и начинается при M=0,8. Маршевый режим выполняется при M=2,0 на высоте 8000 м до дальности 700 км.",
         "Масса обобщённой полезной нагрузки mпр.п.н.=375 кг. В массовом уравнении используются отдельные β0=1,30 и β1=1,20; в основном отчёте β означает β0.",
         "Масса топлива на стартовом и маршевом участках изменяется экспоненциально. Маршевая тяга определяется текущим расходом топлива, а Kp — по средней маршевой тяге.",
@@ -473,7 +529,16 @@ def build_value_scale(
     step = choose_tick_step(data_min, data_max)
 
     axis_min = 0.0 if data_min >= 0.0 else math.floor(data_min / step) * step
-    axis_max = math.ceil(data_max / step) * step
+    # Даже если весь ряд отрицательный, нулевая отметка должна оставаться
+    # внутри поля: горизонтальная ось проводится через y=0.
+    rounded_max = max(0.0, math.ceil(data_max / step) * step)
+    max_on_unit_boundary = math.isclose(
+        data_max / step, round(data_max / step), rel_tol=1e-9, abs_tol=1e-9
+    )
+    axis_max = max(
+        0.0,
+        data_max + 1.5 * step if max_on_unit_boundary else rounded_max,
+    )
     if math.isclose(axis_min, axis_max):
         axis_max = axis_min + step
 
@@ -793,6 +858,16 @@ def draw_plot_area(
     for name, key, color in series:
         draw_series(pdf, plot_points, key, color, bottom, time_x,
                     value_scale, break_time)
+        for marker, reference in reference_points(plot_points):
+            marker_value = reference.get(key)
+            if marker_value is None or not math.isfinite(marker_value):
+                continue
+            marker_x = time_x(
+                reference["t"],
+                right_at_break=break_time is not None and
+                reference["t"] > break_time,
+            )
+            draw_marker(pdf, marker, marker_x, value_y(marker_value), color)
 
     legend_x = left + 5
     legend_y = bottom + chart_height - 12
@@ -839,7 +914,7 @@ def draw_graph_page(
     pdf.setFont(FONT, 7)
     pdf.drawCentredString(
         PAGE_WIDTH / 2, PAGE_HEIGHT - 39,
-        "BalSimulation: H=8000 м, подготовка=3 с, старт=5 с, L=700 км, шаг=0,01 с",
+        "BalSimulation: H=8000 м, подготовка=0,75 с, старт=5 с, L=700 км, шаг=0,01 с",
     )
     pdf.setFont(FONT, 6.0)
     legend_x = 28.0
@@ -849,14 +924,30 @@ def draw_graph_page(
         pdf.setFillColor(MODE_LINE[mode])
         pdf.drawString(legend_x + 16, PAGE_HEIGHT - 48,
                        MODE_NAMES[mode])
-        legend_x += 94
+        legend_x += 120
+
+    # Вторая строка легенды раскрывает смысл геометрических реперных знаков.
+    marker_legend = [
+        ("square", "Пуск — сход ракеты с пилонов самолёта-носителя"),
+        ("star", "Начало работы стартового двигателя"),
+        ("triangle", "Начало работы маршевого двигателя"),
+        ("circle", "Конец полёта"),
+    ]
+    marker_y = PAGE_HEIGHT - 63.0
+    column_width = (PAGE_WIDTH - 56.0) / len(marker_legend)
+    for index, (marker, text) in enumerate(marker_legend):
+        column_x = 28.0 + index * column_width
+        draw_marker(pdf, marker, column_x + 5.0, marker_y - 1.0,
+                    colors.HexColor("#17365D"), size=3.0)
+        draw_wrapped(pdf, text, column_x + 14.0, marker_y + 2.0,
+                     column_width - 18.0, FONT, 5.2, 6.0)
 
     margin_x = 28.0
-    top = PAGE_HEIGHT - 59.0
+    top = PAGE_HEIGHT - 88.0
     gap_x = 18.0
     gap_y = 20.0
     chart_width = (PAGE_WIDTH - 2 * margin_x - gap_x) / 2
-    chart_height = (PAGE_HEIGHT - 80.0 - gap_y - 28.0) / 2
+    chart_height = (top - gap_y - 28.0) / 2
     for index, (title, y_label, series) in enumerate(charts):
         row, column = divmod(index, 2)
         chart_x = margin_x + column * (chart_width + gap_x)
