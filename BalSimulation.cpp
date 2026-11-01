@@ -222,9 +222,9 @@ BalSimulationConfig make_urvp_md_config()
     config.altitude = 110.0;
     config.initial_velocity = 35.0;
     config.initial_mach = 0.0;
-    config.march_mach = 2.0;
+    config.march_mach = 1.7;
     config.target_range = 125000.0;
-    config.payload_mass = 115.0;
+    config.payload_mass = 100.0;
     config.diameter = 0.350;
 
     // Для референса Х-31АД приняты стартовая масса 715 кг и диаметр

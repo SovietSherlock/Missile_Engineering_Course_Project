@@ -309,6 +309,82 @@ def approx(value: float, digits: int = 3) -> str:
     return f"≈ {fmt(value, digits)} (Оценочно)"
 
 
+def estimate_prototype_parameters(
+    summary: dict[str, float],
+    mass: float,
+    generalized_payload: float,
+    diameter: float,
+    terminal_mach: float,
+    range_km: float,
+) -> dict[str, float]:
+    """Оценивает недостающие параметры прототипа общей моделью.
+
+    Используются опубликованные масса, полезная нагрузка, калибр и дальность
+    прототипа. Для сопоставимости с проектом принимаются его высота 110 м,
+    скорость пуска 35 м/с, Hi, beta0/beta1 и удельные импульсы проекта.
+    Для Х-31АД скорость 4,5M является оценкой по открытым данным семейства
+    Х-31 и поэтому в таблице также помечается как оценочная.
+    """
+    gravity = 9.80665
+    start_isp = 2650.0
+    march_isp = 2620.0
+    preparation_duration = summary["Время подготовки"]
+    start_duration = 5.0
+    loss_factor = summary["Hi (коэффициент потерь)"]
+    beta_start = summary["beta_start"]
+    beta_march = summary["beta_march"]
+    speed_of_sound = (
+        summary["Скорость маршевого полёта"] /
+        summary["Маршевое число Маха"]
+    )
+    initial_velocity = summary["Начальная скорость"]
+    march_velocity = terminal_mach * speed_of_sound
+    effective_exhaust_velocity = loss_factor * start_isp
+    delta_v = march_velocity - initial_velocity
+    mu_start = 1.0 - math.exp(-delta_v / effective_exhaust_velocity)
+
+    # Инверсия массового уравнения: известные масса и полезная нагрузка
+    # позволяют получить оценочную долю маршевого топлива после расчёта mu0.
+    mu_march = (
+        1.0 - generalized_payload / mass - beta_start * mu_start
+    ) / beta_march
+    mu_summ = mu_start + mu_march
+
+    start_acceleration = delta_v / start_duration
+    eta_0 = start_acceleration / gravity
+    start_distance = (
+        initial_velocity * start_duration +
+        0.5 * start_acceleration * start_duration ** 2
+    )
+    preparation_distance = initial_velocity * preparation_duration
+    march_distance = range_km * 1000.0 - preparation_distance - start_distance
+    march_time = march_distance / march_velocity
+    start_mass_end = mass * (1.0 - mu_start)
+    dry_mass = mass * (1.0 - mu_summ)
+    march_decay = math.log(start_mass_end / dry_mass) / march_time
+    average_march_thrust = mass * mu_march / march_time * march_isp
+    start_thrust = eta_0 * mass * gravity
+    area = math.pi * diameter ** 2 / 4.0
+    q_start = mass * gravity / area
+
+    return {
+        "mu_start": mu_start,
+        "mu_march": mu_march,
+        "mu_summ": mu_summ,
+        "beta_start": beta_start,
+        "beta_march": beta_march,
+        "eta_0": eta_0,
+        "Km": mu_march / mu_start,
+        "Kp": average_march_thrust / start_thrust,
+        "initial_velocity": initial_velocity,
+        "flight_time": preparation_duration + start_duration + march_time,
+        "q_start": q_start,
+        "q_after_start": q_start * (1.0 - mu_start),
+        "area": area,
+        "diameter": diameter,
+    }
+
+
 def create_results_table() -> None:
     """Формирует двухстраничную таблицу с новыми расчётными результатами."""
     summary = load_summary()
@@ -321,28 +397,37 @@ def create_results_table() -> None:
     def distance_km(key: str, digits: int = 0) -> str:
         return fmt(summary[key] / 1000.0, digits)
 
+    x38 = estimate_prototype_parameters(
+        summary, mass=520.0, generalized_payload=250.0,
+        diameter=0.31, terminal_mach=2.2, range_km=40.0,
+    )
+    x31ad = estimate_prototype_parameters(
+        summary, mass=715.0, generalized_payload=110.0,
+        diameter=0.36, terminal_mach=4.5, range_km=160.0,
+    )
+
     # Открытые данные и ранее выполненные инженерные оценки для сравнения.
     rows = [
         ("Суммарная масса ракеты, кг", "≈ 520*", value("m0"), "≈ 715*"),
         ("Обобщённая полезная нагрузка, кг", "≈ 250* (БЧ)", value("Полезная нагрузка"), "≈ 110* (БЧ)"),
-        ("Суммарная относительная масса топлива", "н/д", value("mu_summ", 4), "н/д"),
-        ("Относительная масса топлива стартового режима", "н/д", value("mu_0 (стартовое топливо)", 4), "н/д"),
-        ("Относительная масса топлива маршевого режима", "н/д", value("mu_1 (маршевое топливо, относительно m0)", 4), "н/д"),
-        ("Коэффициент совершенства стартовой установки (β0)", "н/д", value("beta_start"), "н/д"),
-        ("Коэффициент совершенства маршевой установки (β1)", "н/д", value("beta_march"), "н/д"),
-        ("Стартовая тяговооружённость", "н/д", value("eta_0"), "н/д"),
-        ("Коэффициент распределения топлива (Km)", "н/д", value("Km"), "н/д"),
-        ("Коэффициент отношения тяг (Kp)", "н/д", value("Kp (средняя маршевая тяга)"), "н/д"),
-        ("Начальная скорость, м/с", "н/д", value("Начальная скорость", 1), "н/д"),
-        ("Конечная скорость", "≈ 2,2 M*", "2,0 M", "н/д"),
-        ("Подготовительный режим, с", "н/д", value("Время подготовки"), "н/д"),
-        ("Время полёта, с", "н/д", value("Время полёта"), "н/д"),
+        ("Суммарная относительная масса топлива", approx(x38["mu_summ"], 4), value("mu_summ", 4), approx(x31ad["mu_summ"], 4)),
+        ("Относительная масса топлива стартового режима", approx(x38["mu_start"], 4), value("mu_0 (стартовое топливо)", 4), approx(x31ad["mu_start"], 4)),
+        ("Относительная масса топлива маршевого режима", approx(x38["mu_march"], 4), value("mu_1 (маршевое топливо, относительно m0)", 4), approx(x31ad["mu_march"], 4)),
+        ("Коэффициент совершенства стартовой установки (β0)", approx(x38["beta_start"], 2), value("beta_start"), approx(x31ad["beta_start"], 2)),
+        ("Коэффициент совершенства маршевой установки (β1)", approx(x38["beta_march"], 2), value("beta_march"), approx(x31ad["beta_march"], 2)),
+        ("Стартовая тяговооружённость", approx(x38["eta_0"], 2), value("eta_0"), approx(x31ad["eta_0"], 2)),
+        ("Коэффициент распределения топлива (Km)", approx(x38["Km"], 2), value("Km"), approx(x31ad["Km"], 2)),
+        ("Коэффициент отношения тяг (Kp)", approx(x38["Kp"], 3), value("Kp (средняя маршевая тяга)"), approx(x31ad["Kp"], 3)),
+        ("Начальная скорость, м/с", approx(x38["initial_velocity"], 1), value("Начальная скорость", 1), approx(x31ad["initial_velocity"], 1)),
+        ("Конечная скорость", "2,2 M*", "1,7 M", "≈ 4,5 M (Оценочно)"),
+        ("Подготовительный режим, с", approx(summary["Время подготовки"], 2), value("Время подготовки"), approx(summary["Время подготовки"], 2)),
+        ("Время полёта, с", approx(x38["flight_time"], 2), value("Время полёта"), approx(x31ad["flight_time"], 2)),
         ("Дальность полёта, км", "3–40*", distance_km("Дальность полёта"), "120–160*"),
-        ("Нагрузка на мидель стартового режима, Н/м²", "н/д", value("q_m0 проектируемой ракеты", 1), "≈ " + value("q_m0 референсная", 1) + "*"),
-        ("Нагрузка на мидель после старта, Н/м²", "н/д", value("q_m1 после старта", 1), "н/д"),
-        ("Площадь миделя, м²", "≈ 0,076*", value("Площадь миделя"), value("Площадь референсного миделя", 3) + "*"),
+        ("Нагрузка на мидель стартового режима, Н/м²", approx(x38["q_start"], 1), value("q_m0 проектируемой ракеты", 1), approx(x31ad["q_start"], 1)),
+        ("Нагрузка на мидель после старта, Н/м²", approx(x38["q_after_start"], 1), value("q_m1 после старта", 1), approx(x31ad["q_after_start"], 1)),
+        ("Площадь миделя, м²", approx(x38["area"], 3), value("Площадь миделя"), approx(x31ad["area"], 3)),
         ("Калибр, м", "0,31*", value("Калибр"), "0,36*"),
-        ("Удлинение", "≈ 13,55*", value("Удлинение"), "≈ 14,83*"),
+        ("Удлинение", approx(4.20 / 0.31, 2), value("Удлинение"), approx(5.34 / 0.36, 2)),
         ("Длина ракеты, м", "4,20*", value("Длина ракеты"), "5,34*"),
     ]
 
@@ -436,12 +521,12 @@ def create_results_table() -> None:
     pdf.setFont(FONT, 7.0)
     notes = [
         "Подготовительный режим длится 0,75 с: ракета сходит с пилона самолёта-носителя, двигатель не работает, масса и скорость постоянны.",
-        "Стартовая скорость равна 35 м/с. Стартовый режим длится 5 с, после чего маршевый режим выполняется при M=2,0 на высоте 110 м до дальности 125 км.",
-        "Масса обобщённой полезной нагрузки mпр.п.н.=115 кг. В массовом уравнении используются отдельные β0=1,30 и β1=1,20; в основном отчёте β означает β0.",
+        "Стартовая скорость равна 35 м/с. Стартовый режим длится 5 с, после чего маршевый режим выполняется при M=1,7 на высоте 110 м до дальности 125 км.",
+        "Масса обобщённой полезной нагрузки mпр.п.н.=100 кг. В массовом уравнении используются отдельные β0=1,30 и β1=1,20; в основном отчёте β означает β0.",
         "Масса топлива на стартовом и маршевом участках изменяется экспоненциально. Маршевая тяга определяется текущим расходом топлива, а Kp — по средней маршевой тяге.",
         "Нагрузка на мидель проектируемой ракеты принята аналогичной Х-31АД: mref=715 кг, dref=0,36 м; q_m0 рассчитывается по этим данным.",
         "Калибр проектируемой ракеты принудительно задан d=0,35 м; площадь миделя и q_m0 проектируемой ракеты пересчитаны для этого калибра. График оптимизации q_m1(q_m0) исключён.",
-        "Справочные значения Х-38 и Х-31АД отмечены звёздочкой; относительные топливные и тяговые параметры для них в открытых данных не заданы и обозначены «н/д».",
+        "Параметры прототипов с пометкой «Оценочно» рассчитаны по той же модели: из массы и обобщённой полезной нагрузки восстановлена суммарная доля топлива, затем определены mu0, mu1, Km, Kp, eta0, время полёта и нагрузки на мидель. Для Х-31АД принято оценочное конечное число Маха 4,5.",
     ]
     for note in notes:
         note_y = draw_wrapped(pdf, note, margin, note_y, table_width, FONT, 7.0, 9.0) - 2
