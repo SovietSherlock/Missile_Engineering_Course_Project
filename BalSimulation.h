@@ -10,6 +10,10 @@ struct BalSimulationConfig
 {
     double altitude = 8000.0;
     double initial_mach = 0.8;
+    // Если задано положительное значение, оно имеет приоритет над
+    // initial_mach. Это позволяет задавать скорость авиационного пуска
+    // непосредственно в м/с для низкоскоростного сценария УРВП_МД.
+    double initial_velocity = 0.0;
     double march_mach = 2.0;
     double target_range = 700000.0;
 
@@ -23,8 +27,8 @@ struct BalSimulationConfig
     double beta_start = 1.30;
     double beta_march = 1.20;
 
-    // Нагрузка на мидель проектируемой ракеты принимается равной
-    // нагрузке авиационного варианта П-800 «Оникс».
+    // Масса и диаметр референсной ракеты задаются выбранным сценарием;
+    // по ним рассчитывается её нагрузка на мидель для сравнительной таблицы.
     double reference_mass = 2500.0;
     double reference_diameter = 0.67;
     // Калибр задаётся преподавателем напрямую и не выводится из q_m0.
@@ -32,6 +36,10 @@ struct BalSimulationConfig
     double rocket_density = 1555.0;
     double integration_dt = 0.01;
 };
+
+// Формирует отдельный набор исходных данных для расчёта УРВП_МД.
+// Основная модель и алгоритм расчёта при этом остаются общими с УРВП_БД.
+BalSimulationConfig make_urvp_md_config();
 
 // Расчётные массовые и тяговые параметры, выводимые в итоговой таблице.
 struct BalMassParameters

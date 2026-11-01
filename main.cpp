@@ -1413,7 +1413,7 @@ int main()
     // === НОВЫЙ РАСЧЁТ ПРЯМОЛИНЕЙНОГО ПОЛЁТА ===
     // Массовая модель и идеализированная трёхрежимная траектория
     // реализованы в отдельном модуле BalSimulation.
-    BalSimulationConfig bal_config;
+    BalSimulationConfig bal_config = make_urvp_md_config();
     BalSimulationResult bal_result = run_bal_simulation(bal_config);
     print_bal_simulation_report(bal_config, bal_result);
     save_bal_simulation_outputs(bal_config, bal_result);

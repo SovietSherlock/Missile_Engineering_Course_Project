@@ -90,9 +90,9 @@ bool calculate_mass_parameters(
            finite_positive(parameters.beta);
 }
 
-// Определяет площадь миделя и калибр по референсной нагрузке П-800.
-// Референсная нагрузка не оптимизируется графиком: она непосредственно
-// переносится на проектируемую ракету.
+// Определяет площадь миделя и нагрузки по данным референсной ракеты.
+// Референсная нагрузка не оптимизируется графиком: она рассчитывается
+// непосредственно по массе и диаметру выбранного сравнительного образца.
 bool calculate_geometry(
     const BalSimulationConfig& config,
     BalMassParameters& parameters)
@@ -172,6 +172,12 @@ void save_summary_file(
     std::ofstream file("flat_flight_summary.tsv");
     file << "Показатель\tЗначение\tЕдиницы\n";
     file << std::setprecision(12)
+         << "Высота полёта\t" << config.altitude << "\tм\n"
+         << "Начальная скорость\t" << p.v0 << "\tм/с\n"
+         << "Скорость маршевого полёта\t" << p.v_march << "\tм/с\n"
+         << "Маршевое число Маха\t" << config.march_mach << "\t-\n"
+         << "Дальность полёта\t" << config.target_range << "\tм\n"
+         << "Полезная нагрузка\t" << config.payload_mass << "\tкг\n"
          << "m0\t" << p.m0 << "\tкг\n"
          << "Hi (коэффициент потерь)\t" << config.loss_factor << "\t-\n"
          << "beta_start\t" << p.beta_start << "\t-\n"
@@ -192,6 +198,7 @@ void save_summary_file(
          << "Начальная маршевая тяга\t" << p.march_thrust_start << "\tН\n"
          << "Конечная маршевая тяга\t" << p.march_thrust_end << "\tН\n"
          << "q_m0 референсная\t" << p.reference_midship_load << "\tН/м^2\n"
+         << "Площадь референсного миделя\t" << p.reference_midship_area << "\tм^2\n"
          << "q_m0 проектируемой ракеты\t" << p.midship_load_start << "\tН/м^2\n"
          << "q_m1 после старта\t" << p.midship_load_march << "\tН/м^2\n"
          << "Площадь миделя\t" << p.midship_area << "\tм^2\n"
@@ -206,25 +213,53 @@ void save_summary_file(
 }
 }
 
+BalSimulationConfig make_urvp_md_config()
+{
+    BalSimulationConfig config;
+
+    // Исходные данные второго расчётного варианта: низковысотный пуск
+    // ракеты с характеристиками, заданными в дополнительном ТЗ.
+    config.altitude = 110.0;
+    config.initial_velocity = 35.0;
+    config.initial_mach = 0.0;
+    config.march_mach = 2.0;
+    config.target_range = 125000.0;
+    config.payload_mass = 115.0;
+    config.diameter = 0.350;
+
+    // Для референса Х-31АД приняты стартовая масса 715 кг и диаметр
+    // 0,36 м; по ним непосредственно рассчитывается нагрузка на мидель.
+    config.reference_mass = 715.0;
+    config.reference_diameter = 0.360;
+
+    return config;
+}
+
 BalSimulationResult run_bal_simulation(const BalSimulationConfig& config)
 {
     BalSimulationResult result;
 
     const double speed_of_sound = Atm_GOST4401::a_atm(config.altitude);
     if (!finite_positive(speed_of_sound) ||
-        !finite_positive(config.initial_mach) ||
         !finite_positive(config.march_mach) ||
         !finite_non_negative(config.preparation_duration) ||
         !finite_positive(config.integration_dt) ||
         !finite_positive(config.target_range) ||
-        config.target_range < 700000.0)
+        !finite_non_negative(config.initial_velocity))
     {
         result.status = "invalid_flight_conditions";
         return result;
     }
 
-    const double v0 = config.initial_mach * speed_of_sound;
+    const double v0 = config.initial_velocity > 0.0
+        ? config.initial_velocity
+        : config.initial_mach * speed_of_sound;
     const double v_march = config.march_mach * speed_of_sound;
+    if (!finite_positive(v0))
+    {
+        result.status = "invalid_initial_velocity";
+        return result;
+    }
     if (!calculate_mass_parameters(config, v0, v_march, result.parameters) ||
         !calculate_geometry(config, result.parameters))
     {
