@@ -133,9 +133,35 @@ bool calculate_geometry(
            finite_positive(parameters.rocket_length);
 }
 
-void save_trajectory_file(const std::vector<BalTrajectoryPoint>& trajectory)
+const char* scenario_name(BalSimulationScenario scenario)
 {
-    std::ofstream file("flat_flight_trajectory.gra");
+    switch (scenario)
+    {
+    case BalSimulationScenario::URVP_BD:
+        return "УРВП_БД";
+    case BalSimulationScenario::URVP_MD:
+        return "УРВП_МД";
+    }
+    return "Неизвестный сценарий";
+}
+
+const char* scenario_file_stem(BalSimulationScenario scenario)
+{
+    switch (scenario)
+    {
+    case BalSimulationScenario::URVP_BD:
+        return "flat_flight_urvp_bd";
+    case BalSimulationScenario::URVP_MD:
+        return "flat_flight_urvp_md";
+    }
+    return "flat_flight_unknown";
+}
+
+void save_trajectory_file(
+    const std::string& file_name,
+    const std::vector<BalTrajectoryPoint>& trajectory)
+{
+    std::ofstream file(file_name);
     file << "t\tx_g_r\ty_g_r\tv_r\tmach\tTheta_r\tn_xa_r\tn_ya_r"
          << "\tfuel_rate\tfuel_remaining\tP_r\tmass_r"
          << "\tmu_summ\tmu_0\tmu_1\tfuel_burned_relative"
@@ -165,11 +191,12 @@ void save_trajectory_file(const std::vector<BalTrajectoryPoint>& trajectory)
 }
 
 void save_summary_file(
+    const std::string& file_name,
     const BalSimulationConfig& config,
     const BalSimulationResult& result)
 {
     const BalMassParameters& p = result.parameters;
-    std::ofstream file("flat_flight_summary.tsv");
+    std::ofstream file(file_name);
     file << "Показатель\tЗначение\tЕдиницы\n";
     file << std::setprecision(12)
          << "Высота полёта\t" << config.altitude << "\tм\n"
@@ -211,6 +238,24 @@ void save_summary_file(
          << "Время подготовки\t" << config.preparation_duration << "\tс\n"
          << "Время полёта\t" << p.flight_time << "\tс\n";
 }
+}
+
+BalSimulationConfig make_urvp_bd_config()
+{
+    BalSimulationConfig config;
+
+    // Исходный сценарий УРВП_БД: высотный авиационный запуск.
+    config.altitude = 8000.0;
+    config.initial_mach = 0.8;
+    config.initial_velocity = 0.0;
+    config.march_mach = 2.0;
+    config.target_range = 700000.0;
+    config.payload_mass = 375.0;
+    config.diameter = 0.650;
+    config.reference_mass = 2500.0;
+    config.reference_diameter = 0.670;
+
+    return config;
 }
 
 BalSimulationConfig make_urvp_md_config()
@@ -427,7 +472,8 @@ BalSimulationResult run_bal_simulation(const BalSimulationConfig& config)
 
 void print_bal_simulation_report(
     const BalSimulationConfig& config,
-    const BalSimulationResult& result)
+    const BalSimulationResult& result,
+    BalSimulationScenario scenario)
 {
     if (!result.success)
     {
@@ -437,7 +483,8 @@ void print_bal_simulation_report(
     }
 
     const BalMassParameters& p = result.parameters;
-    std::cout << "\n=== РАСЧЁТ ПРЯМОЛИНЕЙНОГО ПОЛЁТА ===\n";
+    std::cout << "\n=== РАСЧЁТ ПРЯМОЛИНЕЙНОГО ПОЛЁТА: "
+              << scenario_name(scenario) << " ===\n";
     std::cout << "Параметр                         Значение       Единицы\n";
     std::cout << std::fixed << std::setprecision(8);
     std::cout << "Режим подготовки                 "
@@ -491,11 +538,13 @@ void print_bal_simulation_report(
 
 void save_bal_simulation_outputs(
     const BalSimulationConfig& config,
-    const BalSimulationResult& result)
+    const BalSimulationResult& result,
+    BalSimulationScenario scenario)
 {
     if (!result.success)
         return;
 
-    save_trajectory_file(result.trajectory);
-    save_summary_file(config, result);
+    const std::string stem = scenario_file_stem(scenario);
+    save_trajectory_file(stem + "_trajectory.gra", result.trajectory);
+    save_summary_file(stem + "_summary.tsv", config, result);
 }

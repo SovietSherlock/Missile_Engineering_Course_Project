@@ -37,8 +37,17 @@ struct BalSimulationConfig
     double integration_dt = 0.01;
 };
 
-// Формирует отдельный набор исходных данных для расчёта УРВП_МД.
-// Основная модель и алгоритм расчёта при этом остаются общими с УРВП_БД.
+// Явный флаг сценария используется при сохранении временных рядов и
+// последующем формировании таблиц и графиков.
+enum class BalSimulationScenario
+{
+    URVP_BD,
+    URVP_MD,
+};
+
+// Формируют два явно именованных набора исходных данных. Основная модель и
+// алгоритм расчёта при этом остаются общими для УРВП_БД и УРВП_МД.
+BalSimulationConfig make_urvp_bd_config();
 BalSimulationConfig make_urvp_md_config();
 
 // Расчётные массовые и тяговые параметры, выводимые в итоговой таблице.
@@ -124,9 +133,12 @@ BalSimulationResult run_bal_simulation(const BalSimulationConfig& config);
 // Выводит итоговую таблицу расчётных параметров в консоль.
 void print_bal_simulation_report(
     const BalSimulationConfig& config,
-    const BalSimulationResult& result);
+    const BalSimulationResult& result,
+    BalSimulationScenario scenario);
 
 // Сохраняет данные для существующего Plotly/Excel-процесса визуализации.
+// Флаг сценария предотвращает перезапись результатов УРВП_БД и УРВП_МД.
 void save_bal_simulation_outputs(
     const BalSimulationConfig& config,
-    const BalSimulationResult& result);
+    const BalSimulationResult& result,
+    BalSimulationScenario scenario);

@@ -1410,13 +1410,23 @@ int main()
     double mu_fixed = 0.53; // ИЗМЕНИТЬ
     rocket.m0_start = m_pn / (1.0 - rocket.beta * mu_fixed);
 
-    // === НОВЫЙ РАСЧЁТ ПРЯМОЛИНЕЙНОГО ПОЛЁТА ===
-    // Массовая модель и идеализированная трёхрежимная траектория
-    // реализованы в отдельном модуле BalSimulation.
-    BalSimulationConfig bal_config = make_urvp_md_config();
-    BalSimulationResult bal_result = run_bal_simulation(bal_config);
-    print_bal_simulation_report(bal_config, bal_result);
-    save_bal_simulation_outputs(bal_config, bal_result);
+    // === РАСЧЁТЫ ПРЯМОЛИНЕЙНОГО ПОЛЁТА ===
+    // Оба сценария явно вызывают одну общую массово-кинематическую модель.
+    const BalSimulationConfig urvp_bd_config = make_urvp_bd_config();
+    const BalSimulationResult urvp_bd_result =
+        run_bal_simulation(urvp_bd_config);
+    print_bal_simulation_report(
+        urvp_bd_config, urvp_bd_result, BalSimulationScenario::URVP_BD);
+    save_bal_simulation_outputs(
+        urvp_bd_config, urvp_bd_result, BalSimulationScenario::URVP_BD);
+
+    const BalSimulationConfig urvp_md_config = make_urvp_md_config();
+    const BalSimulationResult urvp_md_result =
+        run_bal_simulation(urvp_md_config);
+    print_bal_simulation_report(
+        urvp_md_config, urvp_md_result, BalSimulationScenario::URVP_MD);
+    save_bal_simulation_outputs(
+        urvp_md_config, urvp_md_result, BalSimulationScenario::URVP_MD);
 
     CalcParameters calc;
     calc.dt = 0.01;

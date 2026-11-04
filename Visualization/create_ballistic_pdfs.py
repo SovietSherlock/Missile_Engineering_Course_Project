@@ -1,7 +1,8 @@
 """Создаёт PDF-таблицу и графики обновлённого BalSimulation.
 
-Временной ряд формируется программой проекта в файле
-``flat_flight_trajectory.gra``. Графики показывают подготовительный,
+Временной ряд формируется программой проекта в сценарном файле
+``flat_flight_urvp_bd_trajectory.gra`` или
+``flat_flight_urvp_md_trajectory.gra``. Графики показывают подготовительный,
 стартовый и маршевый режимы на единой разорванной шкале времени с
 увеличенным участком первых секунд полёта.
 """
@@ -9,8 +10,10 @@
 from __future__ import annotations
 
 import csv
+import argparse
 import math
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -23,13 +26,54 @@ from reportlab.pdfgen import canvas
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = ROOT / "Sources"
-TRAJECTORY_FILE = ROOT / "flat_flight_trajectory.gra"
-SUMMARY_FILE = ROOT / "flat_flight_summary.tsv"
-SCENARIO_NAME = "УРВП_МД"
-AIRCRAFT_REFERENCE_NAME = "Х-38"
-MIDSHIP_REFERENCE_NAME = "Х-31АД"
-TABLE_FILE = SOURCES / f"{SCENARIO_NAME} Результаты баллистического расчета.pdf"
-GRAPHS_FILE = SOURCES / f"{SCENARIO_NAME} Графики прямолинейного полёта.pdf"
+
+
+@dataclass(frozen=True)
+class ScenarioConfig:
+    """Флаг сценария и связанные с ним файлы и подписи отчёта."""
+
+    flag: str
+    name: str
+    data_stem: str
+    aircraft_reference_name: str
+    midship_reference_name: str
+    subtitle: str
+
+    @property
+    def trajectory_file(self) -> Path:
+        return ROOT / f"{self.data_stem}_trajectory.gra"
+
+    @property
+    def summary_file(self) -> Path:
+        return ROOT / f"{self.data_stem}_summary.tsv"
+
+    @property
+    def table_file(self) -> Path:
+        return SOURCES / f"{self.name} Результаты баллистического расчета.pdf"
+
+    @property
+    def graphs_file(self) -> Path:
+        return SOURCES / f"{self.name} Графики прямолинейного полёта.pdf"
+
+
+SCENARIOS = {
+    "urvp-bd": ScenarioConfig(
+        flag="urvp-bd",
+        name="УРВП_БД",
+        data_stem="flat_flight_urvp_bd",
+        aircraft_reference_name="Х-35У",
+        midship_reference_name="П-800 «Оникс»",
+        subtitle="УРВП_БД: трёхрежимный высотный прямолинейный полёт",
+    ),
+    "urvp-md": ScenarioConfig(
+        flag="urvp-md",
+        name="УРВП_МД",
+        data_stem="flat_flight_urvp_md",
+        aircraft_reference_name="Х-38",
+        midship_reference_name="Х-31АД",
+        subtitle="УРВП_МД: низковысотный прямолинейный полёт и принудительно заданный калибр ракеты",
+    ),
+}
 
 PAGE = landscape(A4)
 PAGE_WIDTH, PAGE_HEIGHT = PAGE
@@ -238,12 +282,12 @@ def draw_centered_wrapped(
         text_y -= leading
 
 
-def load_summary() -> dict[str, float]:
-    if not SUMMARY_FILE.exists():
+def load_summary(file_path: Path) -> dict[str, float]:
+    if not file_path.exists():
         raise FileNotFoundError(
-            f"Не найден {SUMMARY_FILE.name}; сначала запустите расчёт программы."
+            f"Не найден {file_path.name}; сначала запустите расчёт программы."
         )
-    with SUMMARY_FILE.open("r", encoding="utf-8") as file:
+    with file_path.open("r", encoding="utf-8") as file:
         reader = csv.DictReader(file, delimiter="\t")
         result: dict[str, float] = {}
         for row in reader:
@@ -254,12 +298,12 @@ def load_summary() -> dict[str, float]:
         return result
 
 
-def load_trajectory() -> list[dict[str, float]]:
-    if not TRAJECTORY_FILE.exists():
+def load_trajectory(file_path: Path) -> list[dict[str, float]]:
+    if not file_path.exists():
         raise FileNotFoundError(
-            f"Не найден {TRAJECTORY_FILE.name}; сначала запустите расчёт программы."
+            f"Не найден {file_path.name}; сначала запустите расчёт программы."
         )
-    with TRAJECTORY_FILE.open("r", encoding="utf-8") as file:
+    with file_path.open("r", encoding="utf-8") as file:
         reader = csv.DictReader(file, delimiter="\t")
         points = [
             {key: float(value) for key, value in row.items() if key and value}
@@ -385,11 +429,11 @@ def estimate_prototype_parameters(
     }
 
 
-def create_results_table() -> None:
+def create_results_table(scenario: ScenarioConfig) -> None:
     """Формирует двухстраничную таблицу с новыми расчётными результатами."""
-    summary = load_summary()
-    pdf = canvas.Canvas(str(TABLE_FILE), pagesize=PAGE)
-    pdf.setTitle(f"Результаты баллистического расчёта — {SCENARIO_NAME}")
+    summary = load_summary(scenario.summary_file)
+    pdf = canvas.Canvas(str(scenario.table_file), pagesize=PAGE)
+    pdf.setTitle(f"Результаты баллистического расчёта — {scenario.name}")
 
     def value(key: str, digits: int = 2) -> str:
         return fmt(summary[key], digits)
@@ -397,39 +441,66 @@ def create_results_table() -> None:
     def distance_km(key: str, digits: int = 0) -> str:
         return fmt(summary[key] / 1000.0, digits)
 
-    x38 = estimate_prototype_parameters(
-        summary, mass=520.0, generalized_payload=250.0,
-        diameter=0.31, terminal_mach=2.2, range_km=40.0,
-    )
-    x31ad = estimate_prototype_parameters(
-        summary, mass=715.0, generalized_payload=110.0,
-        diameter=0.36, terminal_mach=4.5, range_km=160.0,
-    )
+    if scenario.flag == "urvp-md":
+        x38 = estimate_prototype_parameters(
+            summary, mass=520.0, generalized_payload=250.0,
+            diameter=0.31, terminal_mach=2.2, range_km=40.0,
+        )
+        x31ad = estimate_prototype_parameters(
+            summary, mass=715.0, generalized_payload=110.0,
+            diameter=0.36, terminal_mach=4.5, range_km=160.0,
+        )
 
-    # Открытые данные и ранее выполненные инженерные оценки для сравнения.
-    rows = [
-        ("Суммарная масса ракеты, кг", "≈ 520*", value("m0"), "≈ 715*"),
-        ("Обобщённая полезная нагрузка, кг", "≈ 250* (БЧ)", value("Полезная нагрузка"), "≈ 110* (БЧ)"),
-        ("Суммарная относительная масса топлива", approx(x38["mu_summ"], 4), value("mu_summ", 4), approx(x31ad["mu_summ"], 4)),
-        ("Относительная масса топлива стартового режима", approx(x38["mu_start"], 4), value("mu_0 (стартовое топливо)", 4), approx(x31ad["mu_start"], 4)),
-        ("Относительная масса топлива маршевого режима", approx(x38["mu_march"], 4), value("mu_1 (маршевое топливо, относительно m0)", 4), approx(x31ad["mu_march"], 4)),
-        ("Коэффициент совершенства стартовой установки (β0)", approx(x38["beta_start"], 2), value("beta_start"), approx(x31ad["beta_start"], 2)),
-        ("Коэффициент совершенства маршевой установки (β1)", approx(x38["beta_march"], 2), value("beta_march"), approx(x31ad["beta_march"], 2)),
-        ("Стартовая тяговооружённость", approx(x38["eta_0"], 2), value("eta_0"), approx(x31ad["eta_0"], 2)),
-        ("Коэффициент распределения топлива (Km)", approx(x38["Km"], 2), value("Km"), approx(x31ad["Km"], 2)),
-        ("Коэффициент отношения тяг (Kp)", approx(x38["Kp"], 3), value("Kp (средняя маршевая тяга)"), approx(x31ad["Kp"], 3)),
-        ("Начальная скорость, м/с", approx(x38["initial_velocity"], 1), value("Начальная скорость", 1), approx(x31ad["initial_velocity"], 1)),
-        ("Конечная скорость", "2,2 M*", "1,7 M", "≈ 4,5 M (Оценочно)"),
-        ("Подготовительный режим, с", approx(summary["Время подготовки"], 2), value("Время подготовки"), approx(summary["Время подготовки"], 2)),
-        ("Время полёта, с", approx(x38["flight_time"], 2), value("Время полёта"), approx(x31ad["flight_time"], 2)),
-        ("Дальность полёта, км", "3–40*", distance_km("Дальность полёта"), "120–160*"),
-        ("Нагрузка на мидель стартового режима, Н/м²", approx(x38["q_start"], 1), value("q_m0 проектируемой ракеты", 1), approx(x31ad["q_start"], 1)),
-        ("Нагрузка на мидель после старта, Н/м²", approx(x38["q_after_start"], 1), value("q_m1 после старта", 1), approx(x31ad["q_after_start"], 1)),
-        ("Площадь миделя, м²", approx(x38["area"], 3), value("Площадь миделя"), approx(x31ad["area"], 3)),
-        ("Калибр, м", "0,31*", value("Калибр"), "0,36*"),
-        ("Удлинение", approx(4.20 / 0.31, 2), value("Удлинение"), approx(5.34 / 0.36, 2)),
-        ("Длина ракеты, м", "4,20*", value("Длина ракеты"), "5,34*"),
-    ]
+        # Открытые данные и инженерные оценки для сравнения УРВП_МД.
+        rows = [
+            ("Суммарная масса ракеты, кг", "≈ 520*", value("m0"), "≈ 715*"),
+            ("Обобщённая полезная нагрузка, кг", "≈ 250* (БЧ)", value("Полезная нагрузка"), "≈ 110* (БЧ)"),
+            ("Суммарная относительная масса топлива", approx(x38["mu_summ"], 4), value("mu_summ", 4), approx(x31ad["mu_summ"], 4)),
+            ("Относительная масса топлива стартового режима", approx(x38["mu_start"], 4), value("mu_0 (стартовое топливо)", 4), approx(x31ad["mu_start"], 4)),
+            ("Относительная масса топлива маршевого режима", approx(x38["mu_march"], 4), value("mu_1 (маршевое топливо, относительно m0)", 4), approx(x31ad["mu_march"], 4)),
+            ("Коэффициент совершенства стартовой установки (β0)", approx(x38["beta_start"], 2), value("beta_start"), approx(x31ad["beta_start"], 2)),
+            ("Коэффициент совершенства маршевой установки (β1)", approx(x38["beta_march"], 2), value("beta_march"), approx(x31ad["beta_march"], 2)),
+            ("Стартовая тяговооружённость", approx(x38["eta_0"], 2), value("eta_0"), approx(x31ad["eta_0"], 2)),
+            ("Коэффициент распределения топлива (Km)", approx(x38["Km"], 2), value("Km"), approx(x31ad["Km"], 2)),
+            ("Коэффициент отношения тяг (Kp)", approx(x38["Kp"], 3), value("Kp (средняя маршевая тяга)"), approx(x31ad["Kp"], 3)),
+            ("Начальная скорость, м/с", approx(x38["initial_velocity"], 1), value("Начальная скорость", 1), approx(x31ad["initial_velocity"], 1)),
+            ("Конечная скорость", "2,2 M*", "1,7 M", "≈ 4,5 M (Оценочно)"),
+            ("Подготовительный режим, с", approx(summary["Время подготовки"], 2), value("Время подготовки"), approx(summary["Время подготовки"], 2)),
+            ("Время полёта, с", approx(x38["flight_time"], 2), value("Время полёта"), approx(x31ad["flight_time"], 2)),
+            ("Дальность полёта, км", "3–40*", distance_km("Дальность полёта"), "120–160*"),
+            ("Нагрузка на мидель стартового режима, Н/м²", approx(x38["q_start"], 1), value("q_m0 проектируемой ракеты", 1), approx(x31ad["q_start"], 1)),
+            ("Нагрузка на мидель после старта, Н/м²", approx(x38["q_after_start"], 1), value("q_m1 после старта", 1), approx(x31ad["q_after_start"], 1)),
+            ("Площадь миделя, м²", approx(x38["area"], 3), value("Площадь миделя"), approx(x31ad["area"], 3)),
+            ("Калибр, м", "0,31*", value("Калибр"), "0,36*"),
+            ("Удлинение", approx(4.20 / 0.31, 2), value("Удлинение"), approx(5.34 / 0.36, 2)),
+            ("Длина ракеты, м", "4,20*", value("Длина ракеты"), "5,34*"),
+        ]
+    else:
+        # Историческое оформление таблицы УРВП_БД с теми же параметрами,
+        # которые задаёт make_urvp_bd_config().
+        rows = [
+            ("Суммарная масса ракеты, кг", "550–610*", value("m0"), "≈ 2500*"),
+            ("Обобщённая полезная нагрузка, кг", "н/д", value("Полезная нагрузка"), "н/д"),
+            ("Суммарная относительная масса топлива", "≈ 0,350 (Оценочно)", value("mu_summ", 4), "≈ 0,550 (Оценочно)"),
+            ("Относительная масса топлива стартового режима", "≈ 0,061 (Оценочно)", value("mu_0 (стартовое топливо)", 4), "≈ 0,243 (Оценочно)"),
+            ("Относительная масса топлива маршевого режима", "≈ 0,289 (Оценочно)", value("mu_1 (маршевое топливо, относительно m0)", 4), "≈ 0,307 (Оценочно)"),
+            ("Коэффициент совершенства стартовой установки (β0)", "≈ 1,155 (Оценочно)", value("beta_start"), "≈ 1,130 (Оценочно)"),
+            ("Коэффициент совершенства маршевой установки (β1)", "≈ 1,155 (Оценочно)", value("beta_march"), "≈ 1,130 (Оценочно)"),
+            ("Стартовая тяговооружённость", "≈ 3,12 (Оценочно)", value("eta_0"), "≈ 13,87 (Оценочно)"),
+            ("Коэффициент распределения топлива (Km)", "≈ 4,754 (Оценочно)", value("Km"), "≈ 1,260 (Оценочно)"),
+            ("Коэффициент отношения тяг (Kp)", "≈ 0,026 (Оценочно)", value("Kp (средняя маршевая тяга)"), "≈ 0,009 (Оценочно)"),
+            ("Начальная скорость", "≈ 0,35 M (Оценочно)", "0,8 M", "≈ 0 M (Оценочно)"),
+            ("Конечная скорость", "≈ 0,8 M (Оценочно)", "2,0 M", "≈ 2,5 M (Оценочно)"),
+            ("Подготовительный режим, с", "н/д", value("Время подготовки"), "н/д"),
+            ("Время полёта, с", "≈ 930–960 (Оценочно)", value("Время полёта"), "≈ 340–880 (Оценочно)"),
+            ("Дальность полёта, км", "260*", distance_km("Дальность полёта"), "300–600*"),
+            ("Нагрузка на мидель стартового режима, Н/м²", "н/д", value("q_m0 проектируемой ракеты", 1), "≈ " + value("q_m0 референсная", 1) + "*"),
+            ("Нагрузка на мидель после старта, Н/м²", "н/д", value("q_m1 после старта", 1), "н/д"),
+            ("Площадь миделя, м²", "н/д", value("Площадь миделя"), "≈ 0,353*"),
+            ("Калибр, м", "0,42*", value("Калибр"), "0,67*"),
+            ("Удлинение", "н/д", value("Удлинение"), "н/д"),
+            ("Длина ракеты, м", "н/д", value("Длина ракеты"), "6,10*"),
+        ]
 
     margin = 28.0
     table_x = margin
@@ -437,9 +508,9 @@ def create_results_table() -> None:
     column_widths = [242.0, 165.0, 165.0, table_width - 572.0]
     headers = [
         "Рассматриваемый образец",
-        AIRCRAFT_REFERENCE_NAME,
+        scenario.aircraft_reference_name,
         "Проектируемая ракета",
-        MIDSHIP_REFERENCE_NAME,
+        scenario.midship_reference_name,
     ]
 
     pdf.setFillColor(colors.HexColor("#17365D"))
@@ -452,7 +523,7 @@ def create_results_table() -> None:
     pdf.setFont(FONT, 7.5)
     pdf.drawCentredString(
         PAGE_WIDTH / 2, PAGE_HEIGHT - 41,
-        "УРВП_МД: низковысотный прямолинейный полёт и принудительно заданный калибр ракеты",
+        scenario.subtitle,
     )
 
     top = PAGE_HEIGHT - 53.0
@@ -519,15 +590,41 @@ def create_results_table() -> None:
     pdf.setFillColor(colors.HexColor("#333333"))
     note_y = PAGE_HEIGHT - 53
     pdf.setFont(FONT, 7.0)
-    notes = [
+    speed_of_sound = (
+        summary["Скорость маршевого полёта"] /
+        summary["Маршевое число Маха"]
+    )
+    initial_mach = summary["Начальная скорость"] / speed_of_sound
+    common_notes = [
         "Подготовительный режим длится 0,75 с: ракета сходит с пилона самолёта-носителя, двигатель не работает, масса и скорость постоянны.",
-        f"Стартовая скорость равна {fmt(summary['Начальная скорость'], 1)} м/с. Стартовый режим длится 5 с, после чего маршевый режим выполняется при M={fmt(summary['Маршевое число Маха'], 1)} на высоте {fmt(summary['Высота полёта'], 0)} м до дальности {fmt(summary['Дальность полёта'] / 1000.0, 0)} км.",
-        "Масса обобщённой полезной нагрузки mпр.п.н.=100 кг. В массовом уравнении используются отдельные β0=1,30 и β1=1,20; в основном отчёте β означает β0.",
+        f"Начальная скорость равна {fmt(summary['Начальная скорость'], 1)} м/с (M={fmt(initial_mach, 2)}). Стартовый режим длится 5 с, после чего маршевый режим выполняется при M={fmt(summary['Маршевое число Маха'], 1)} на высоте {fmt(summary['Высота полёта'], 0)} м до дальности {fmt(summary['Дальность полёта'] / 1000.0, 0)} км.",
+        f"Масса обобщённой полезной нагрузки mпр.п.н.={fmt(summary['Полезная нагрузка'], 0)} кг. В массовом уравнении используются отдельные β0=1,30 и β1=1,20; в основном отчёте β означает β0.",
         "Масса топлива на стартовом и маршевом участках изменяется экспоненциально. Маршевая тяга определяется текущим расходом топлива, а Kp — по средней маршевой тяге.",
-        "Нагрузка на мидель проектируемой ракеты принята аналогичной Х-31АД: mref=715 кг, dref=0,36 м; q_m0 рассчитывается по этим данным.",
-        "Калибр проектируемой ракеты принудительно задан d=0,35 м; площадь миделя и q_m0 проектируемой ракеты пересчитаны для этого калибра. График оптимизации q_m1(q_m0) исключён.",
-        "Параметры прототипов с пометкой «Оценочно» рассчитаны по той же модели: из массы и обобщённой полезной нагрузки восстановлена суммарная доля топлива, затем определены mu0, mu1, Km, Kp, eta0, время полёта и нагрузки на мидель. Для Х-31АД принято оценочное конечное число Маха 4,5.",
     ]
+    if scenario.flag == "urvp-md":
+        notes = common_notes + [
+            "Нагрузка на мидель проектируемой ракеты принята аналогичной Х-31АД: mref=715 кг, dref=0,36 м; q_m0 рассчитывается по этим данным.",
+            "Калибр проектируемой ракеты принудительно задан d=0,35 м; площадь миделя и q_m0 проектируемой ракеты пересчитаны для этого калибра. График оптимизации q_m1(q_m0) исключён.",
+            "Параметры прототипов с пометкой «Оценочно» рассчитаны по той же модели: из массы и обобщённой полезной нагрузки восстановлена суммарная доля топлива, затем определены mu0, mu1, Km, Kp, eta0, время полёта и нагрузки на мидель. Для Х-31АД принято оценочное конечное число Маха 4,5.",
+        ]
+        source_lines = [
+            "[1] Х-38МЭ: https://missilery.info/missile/x-38",
+            "[2] Х-31АД: https://xn--b1agacl3aeas4a.xn--p1ai/armament/h-31ad",
+            "[3] Астахова Н.Е., Толкачёва Е.А. Баллистическое проектирование летательных аппаратов, раздел 2.2 «Массовый анализ», стр. 18–19.",
+        ]
+    else:
+        notes = common_notes + [
+            "Нагрузка на мидель проектируемой ракеты принята аналогичной П-800 «Оникс»: mref=2500 кг, dref=0,67 м; q_m0 рассчитывается по этим данным.",
+            "Калибр проектируемой ракеты принудительно задан d=0,65 м; площадь миделя и q_m0 проектируемой ракеты пересчитаны для этого калибра. График оптимизации q_m1(q_m0) исключён.",
+            "Значения в колонках Х-35У и П-800 «Оникс», отмеченные «Оценочно», получены по открытым данным и инженерным допущениям и не являются паспортными характеристиками.",
+        ]
+        source_lines = [
+            "[1] U.S. Army, ODIN/WEG, Kh-35UE Russian Short-Range Cruise Missile: https://odin.t2com.army.mil/WEG/Asset/6fcff411c9e671a6f57ade2512aca882",
+            "[2] U.S. Army, ODIN/WEG, P-800 Oniks: https://odin.t2com.army.mil/WEG/Asset/ee8265a1ec4f27de72058cf336eff5f6",
+            "[3] ИС «Ракетная техника», ПКР Х-35: https://missilery.info/missile/uran",
+            "[4] ИС «Ракетная техника», ПКР «Яхонт» (Оникс): https://missilery.info/missile/jakhont",
+            "[5] Астахова Н.Е., Толкачёва Е.А. Баллистическое проектирование летательных аппаратов, раздел 2.2 «Массовый анализ», стр. 18–19.",
+        ]
     for note in notes:
         note_y = draw_wrapped(pdf, note, margin, note_y, table_width, FONT, 7.0, 9.0) - 2
 
@@ -535,11 +632,6 @@ def create_results_table() -> None:
     pdf.drawString(margin, note_y, "Источники:")
     note_y -= 10
     pdf.setFont(FONT, 6.5)
-    source_lines = [
-        "[1] Х-38МЭ: https://missilery.info/missile/x-38",
-        "[2] Х-31АД: https://xn--b1agacl3aeas4a.xn--p1ai/armament/h-31ad",
-        "[3] Астахова Н.Е., Толкачёва Е.А. Баллистическое проектирование летательных аппаратов, раздел 2.2 «Массовый анализ», стр. 18–19.",
-    ]
     for source in source_lines:
         note_y = draw_wrapped(pdf, source, margin, note_y, table_width, FONT, 6.5, 8.0)
 
@@ -1055,11 +1147,13 @@ def draw_graph_page(
                         f"Страница {pdf.getPageNumber()}")
 
 
-def create_graphs() -> None:
-    summary = load_summary()
-    points = downsample(load_trajectory())
-    pdf = canvas.Canvas(str(GRAPHS_FILE), pagesize=PAGE)
-    pdf.setTitle("Графики прямолинейного полёта — трёхрежимная модель")
+def create_graphs(scenario: ScenarioConfig) -> None:
+    summary = load_summary(scenario.summary_file)
+    points = downsample(load_trajectory(scenario.trajectory_file))
+    pdf = canvas.Canvas(str(scenario.graphs_file), pagesize=PAGE)
+    pdf.setTitle(
+        f"Графики прямолинейного полёта — {scenario.name}"
+    )
 
     blue = colors.HexColor("#1F4E79")
     orange = colors.HexColor("#C55A11")
@@ -1104,13 +1198,27 @@ def create_graphs() -> None:
     pdf.save()
 
 
+def parse_scenario() -> ScenarioConfig:
+    parser = argparse.ArgumentParser(
+        description="Формирование PDF для выбранного сценария BalSimulation."
+    )
+    parser.add_argument(
+        "--scenario",
+        choices=sorted(SCENARIOS),
+        default="urvp-md",
+        help="Флаг сценария: urvp-bd или urvp-md.",
+    )
+    return SCENARIOS[parser.parse_args().scenario]
+
+
 def main() -> None:
+    scenario = parse_scenario()
     register_fonts()
     SOURCES.mkdir(parents=True, exist_ok=True)
-    create_results_table()
-    create_graphs()
-    print(f"Таблица сохранена: {TABLE_FILE}")
-    print(f"Графики сохранены: {GRAPHS_FILE}")
+    create_results_table(scenario)
+    create_graphs(scenario)
+    print(f"Таблица сохранена: {scenario.table_file}")
+    print(f"Графики сохранены: {scenario.graphs_file}")
 
 
 if __name__ == "__main__":
