@@ -220,10 +220,10 @@ BalSimulationConfig make_urvp_md_config()
     // Исходные данные второго расчётного варианта: низковысотный пуск
     // ракеты с характеристиками, заданными в дополнительном ТЗ.
     config.altitude = 110.0;
-    config.initial_velocity = 35.0;
+    config.initial_velocity = 65.0;
     config.initial_mach = 0.0;
     config.march_mach = 1.7;
-    config.target_range = 90000.0;
+    config.target_range = 125000.0;
     config.payload_mass = 100.0;
     config.diameter = 0.350;
 
