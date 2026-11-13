@@ -31,6 +31,9 @@ struct BalSimulationConfig
     // по ним рассчитывается её нагрузка на мидель для сравнительной таблицы.
     double reference_mass = 2500.0;
     double reference_diameter = 0.67;
+    // Если true, назначенная нагрузка на мидель проектируемой ракеты
+    // принимается равной нагрузке референсного образца.
+    bool assign_reference_midship_load = false;
     // Калибр задаётся преподавателем напрямую и не выводится из q_m0.
     double diameter = 0.65;
     double rocket_density = 1555.0;
@@ -89,6 +92,8 @@ struct BalMassParameters
     double midship_area = 0.0;
     double midship_load_start = 0.0;
     double midship_load_march = 0.0;
+    double geometric_midship_load_start = 0.0;
+    double geometric_midship_load_march = 0.0;
     double diameter = 0.0;
     double lambda = 0.0;
     double rocket_length = 0.0;
