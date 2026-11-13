@@ -110,22 +110,13 @@ bool calculate_geometry(
     parameters.reference_midship_load =
         config.reference_mass * g / parameters.reference_midship_area;
 
-    // После изменения ТЗ калибр фиксируется напрямую. Сначала сохраняем
-    // геометрическое контрольное значение q=m0*g/S для назначенной площади.
+    // Калибр фиксируется напрямую; нагрузка на мидель рассчитывается
+    // непосредственно по стартовой массе и назначенной площади.
     parameters.diameter = config.diameter;
     parameters.midship_area = pi * parameters.diameter *
         parameters.diameter / 4.0;
-    parameters.geometric_midship_load_start = parameters.m0 * g /
+    parameters.midship_load_start = parameters.m0 * g /
         parameters.midship_area;
-    parameters.geometric_midship_load_march =
-        parameters.geometric_midship_load_start *
-        (1.0 - parameters.mu_start);
-
-    // Для УРВП_МД преподавателем назначается нагрузка, аналогичная Х-31АД.
-    // Геометрическое значение при этом сохраняется отдельно для контроля.
-    parameters.midship_load_start = config.assign_reference_midship_load
-        ? parameters.reference_midship_load
-        : parameters.geometric_midship_load_start;
     parameters.midship_load_march = parameters.midship_load_start *
         (1.0 - parameters.mu_start);
 
@@ -237,10 +228,6 @@ void save_summary_file(
          << "Площадь референсного миделя\t" << p.reference_midship_area << "\tм^2\n"
          << "q_m0 проектируемой ракеты\t" << p.midship_load_start << "\tН/м^2\n"
          << "q_m1 после старта\t" << p.midship_load_march << "\tН/м^2\n"
-         << "q_m0 по m0 и калибру (контроль)\t"
-         << p.geometric_midship_load_start << "\tН/м^2\n"
-         << "q_m1 по m0 и калибру (контроль)\t"
-         << p.geometric_midship_load_march << "\tН/м^2\n"
          << "Площадь миделя\t" << p.midship_area << "\tм^2\n"
          << "Калибр\t" << p.diameter << "\tм\n"
          << "Удлинение\t" << p.lambda << "\t-\n"
@@ -284,11 +271,9 @@ BalSimulationConfig make_urvp_md_config()
     config.target_range = 125000.0;
     config.payload_mass = 140.0;
     config.diameter = 0.350;
-    config.assign_reference_midship_load = true;
 
-    // Нагрузка на мидель УРВП_МД назначается аналогичной Х-31АД:
-    // стартовая масса 715 кг и диаметр 0,36 м используются для расчёта
-    // референсного q_m0 в таблице результатов.
+    // Х-31АД используется только как сравнительный образец в таблице:
+    // по его стартовой массе и диаметру рассчитывается референсное q_m0.
     config.reference_mass = 715.0;
     config.reference_diameter = 0.360;
 
