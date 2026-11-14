@@ -15,13 +15,18 @@ struct BalSimulationConfig
     // непосредственно в м/с для низкоскоростного сценария УРВП_МД.
     double initial_velocity = 0.0;
     double march_mach = 2.0;
+    // Дальность от начала разгонного участка; подготовительный участок
+    // авиационного запуска в эту величину не входит.
     double target_range = 700000.0;
 
     double preparation_duration = 0.75;
     double start_specific_impulse = 2650.0;
     double march_specific_impulse = 2620.0;
     double start_duration = 5.0;
+    // Текущий коэффициент Hi (chi) сохраняется без изменения и учитывается
+    // одинаково для разгонного и маршевого режимов.
     double loss_factor = 0.89;
+    // Верхняя граница применимости новой массовой модели.
     double mu_summ_limit = 0.7;
     double payload_mass = 375.0;
     double beta_start = 1.30;
@@ -82,6 +87,10 @@ struct BalMassParameters
     double march_distance = 0.0;
     double start_mass_end = 0.0;
     double march_mass_end = 0.0;
+    double march_time = 0.0;
+    double powered_flight_time = 0.0;
+    double ideal_velocity = 0.0;
+    double average_specific_impulse = 0.0;
     double flight_time = 0.0;
 
     double reference_midship_area = 0.0;

@@ -369,11 +369,11 @@ def estimate_prototype_parameters(
     Для Х-31АД скорость 4,5M является оценкой по открытым данным семейства
     Х-31 и поэтому в таблице также помечается как оценочная.
     """
-    gravity = 9.80665
-    start_isp = 2650.0
-    march_isp = 2620.0
+    gravity = 9.81
+    start_isp = summary["Iуд.р"]
+    march_isp = summary["Iуд.м"]
     preparation_duration = summary["Время подготовки"]
-    start_duration = 5.0
+    start_duration = summary["Время разгона"]
     loss_factor = summary["Hi (коэффициент потерь)"]
     beta_start = summary["beta_start"]
     beta_march = summary["beta_march"]
@@ -383,26 +383,38 @@ def estimate_prototype_parameters(
     )
     initial_velocity = summary["Начальная скорость"]
     march_velocity = terminal_mach * speed_of_sound
-    effective_exhaust_velocity = loss_factor * start_isp
     delta_v = march_velocity - initial_velocity
-    mu_start = 1.0 - math.exp(-delta_v / effective_exhaust_velocity)
+    start_distance = (initial_velocity + march_velocity) * start_duration / 2.0
+    march_distance = range_km * 1000.0 - start_distance
+    march_time = march_distance / march_velocity
+    powered_flight_time = start_duration + march_time
+    ideal_velocity = delta_v + gravity * powered_flight_time
+    average_specific_impulse = (
+        start_isp * start_duration + march_isp * march_time
+    ) / powered_flight_time
 
-    # Инверсия массового уравнения: известные масса и полезная нагрузка
-    # позволяют получить оценочную долю маршевого топлива после расчёта mu0.
-    mu_march = (
-        1.0 - generalized_payload / mass - beta_start * mu_start
-    ) / beta_march
-    mu_summ = mu_start + mu_march
+    # Для сравнительного образца используется та же модель относительных
+    # масс, что и для проектируемой ракеты. Опубликованная масса остаётся
+    # исходной величиной для расчёта нагрузки на мидель.
+    mu_start = 1.0 - math.exp(
+        -delta_v / (loss_factor * start_isp)
+    )
+    mu_summ = 1.0 - math.exp(
+        -ideal_velocity / (loss_factor * average_specific_impulse)
+    )
+    mu_march = mu_summ - mu_start
+    mu_march_local = mu_march / (1.0 - mu_start)
+
+    # Проверяем массовый баланс по новой формуле m0. Для сравнительного
+    # образца mass — опубликованная масса, а model_mass — масса, которую
+    # даёт единая модель при заданной полезной нагрузке.
+    mass_denominator = (
+        1.0 - beta_start * mu_start - beta_march * mu_march
+    )
+    model_mass = generalized_payload / mass_denominator
 
     start_acceleration = delta_v / start_duration
     eta_0 = start_acceleration / gravity
-    start_distance = (
-        initial_velocity * start_duration +
-        0.5 * start_acceleration * start_duration ** 2
-    )
-    preparation_distance = initial_velocity * preparation_duration
-    march_distance = range_km * 1000.0 - preparation_distance - start_distance
-    march_time = march_distance / march_velocity
     start_mass_end = mass * (1.0 - mu_start)
     dry_mass = mass * (1.0 - mu_summ)
     march_decay = math.log(start_mass_end / dry_mass) / march_time
@@ -414,7 +426,9 @@ def estimate_prototype_parameters(
     return {
         "mu_start": mu_start,
         "mu_march": mu_march,
+        "mu_march_local": mu_march_local,
         "mu_summ": mu_summ,
+        "model_mass": model_mass,
         "beta_start": beta_start,
         "beta_march": beta_march,
         "eta_0": eta_0,
@@ -422,6 +436,7 @@ def estimate_prototype_parameters(
         "Kp": average_march_thrust / start_thrust,
         "initial_velocity": initial_velocity,
         "flight_time": preparation_duration + start_duration + march_time,
+        "powered_flight_time": powered_flight_time,
         "q_start": q_start,
         "q_after_start": q_start * (1.0 - mu_start),
         "area": area,
@@ -596,9 +611,9 @@ def create_results_table(scenario: ScenarioConfig) -> None:
     )
     initial_mach = summary["Начальная скорость"] / speed_of_sound
     common_notes = [
-        "Подготовительный режим длится 0,75 с: ракета сходит с пилона самолёта-носителя, двигатель не работает, масса и скорость постоянны.",
-        f"Начальная скорость равна {fmt(summary['Начальная скорость'], 1)} м/с (M={fmt(initial_mach, 2)}). Стартовый режим длится 5 с, после чего маршевый режим выполняется при M={fmt(summary['Маршевое число Маха'], 1)} на высоте {fmt(summary['Высота полёта'], 0)} м до дальности {fmt(summary['Дальность полёта'] / 1000.0, 0)} км.",
-        f"Масса обобщённой полезной нагрузки mпр.п.н.={fmt(summary['Полезная нагрузка'], 0)} кг. В массовом уравнении используются отдельные β0=1,30 и β1=1,20; в основном отчёте β означает β0.",
+        "Подготовительный режим длится 0,75 с: ракета сходит с пилона самолёта-носителя, двигатель не работает, масса и скорость постоянны; этот участок не входит в массовый расчёт.",
+        f"Начальная скорость равна {fmt(summary['Начальная скорость'], 1)} м/с (M={fmt(initial_mach, 2)}). Разгонный режим длится {fmt(summary['Время разгона'], 2)} с, после чего маршевый режим выполняется при M={fmt(summary['Маршевое число Маха'], 1)} на высоте {fmt(summary['Высота полёта'], 0)} м до дальности {fmt(summary['Дальность полёта'] / 1000.0, 0)} км от начала разгона.",
+        f"Масса обобщённой полезной нагрузки mпр.п.н.={fmt(summary['Полезная нагрузка'], 0)} кг. В массовом уравнении используются отдельные β0=1,30 и β1=1,20; m0 рассчитывается через разгонную и маршевую относительные массы топлива.",
         "Масса топлива на стартовом и маршевом участках изменяется экспоненциально. Маршевая тяга определяется текущим расходом топлива, а Kp — по средней маршевой тяге.",
     ]
     if scenario.flag == "urvp-md":

@@ -23,19 +23,13 @@ bool finite_non_negative(double value)
     return std::isfinite(value) && value >= 0.0;
 }
 
-// Рассчитывает массовые параметры по массовому уравнению для ЛА
-// с двухрежимным двигателем. В отличие от прежней версии, коэффициенты
-// совершенства стартовой и маршевой установок задаются отдельно.
+// Рассчитывает массовые параметры двухрежимной ракеты после определения
+// кинематики разгона и марша. Подготовительный участок авиационного запуска
+// намеренно не участвует в tSigma и v_id: он нужен только для временного ряда.
 bool calculate_mass_parameters(
     const BalSimulationConfig& config,
-    double v0,
-    double v_march,
     BalMassParameters& parameters)
 {
-    parameters.v0 = v0;
-    parameters.v_march = v_march;
-    parameters.delta_v_start = v_march - v0;
-    parameters.mu_summ = config.mu_summ_limit;
     parameters.beta_start = config.beta_start;
     parameters.beta_march = config.beta_march;
     parameters.beta = config.beta_start;
@@ -45,22 +39,48 @@ bool calculate_mass_parameters(
         !finite_positive(config.march_specific_impulse) ||
         !finite_positive(config.start_duration) ||
         !finite_positive(config.loss_factor) ||
+        !finite_positive(config.mu_summ_limit) ||
+        config.mu_summ_limit > 1.0 ||
         !finite_positive(config.beta_start) ||
         !finite_positive(config.beta_march) ||
+        !finite_positive(parameters.v0) ||
+        !finite_positive(parameters.v_march) ||
         parameters.delta_v_start <= 0.0 ||
-        parameters.mu_summ <= 0.0 || parameters.mu_summ > 1.0)
+        !finite_positive(parameters.start_distance) ||
+        !finite_positive(parameters.march_distance) ||
+        !finite_positive(parameters.march_time) ||
+        !finite_positive(parameters.powered_flight_time))
     {
         return false;
     }
 
-    const double effective_start_exhaust_velocity =
-        config.loss_factor * config.start_specific_impulse;
+    // Hi (chi) — уже используемый в проекте коэффициент потерь. Его
+    // значение не заменяется на новое фиксированное число и применяется
+    // одинаково к удельным импульсам обоих режимов.
+    parameters.ideal_velocity = parameters.delta_v_start +
+        g * parameters.powered_flight_time;
+    parameters.average_specific_impulse =
+        (config.start_specific_impulse * config.start_duration +
+         config.march_specific_impulse * parameters.march_time) /
+        parameters.powered_flight_time;
+
+    if (!finite_positive(parameters.ideal_velocity) ||
+        !finite_positive(parameters.average_specific_impulse))
+    {
+        return false;
+    }
+
+    parameters.mu_summ = 1.0 - std::exp(
+        -parameters.ideal_velocity /
+            (config.loss_factor * parameters.average_specific_impulse));
     parameters.mu_start = 1.0 - std::exp(
-        -parameters.delta_v_start / effective_start_exhaust_velocity);
+        -parameters.delta_v_start /
+            (config.loss_factor * config.start_specific_impulse));
     parameters.mu_march = parameters.mu_summ - parameters.mu_start;
 
-    if (parameters.mu_march <= 0.0 || parameters.mu_start <= 0.0 ||
-        parameters.mu_start >= 1.0)
+    if (!(parameters.mu_start > 0.0 &&
+          parameters.mu_start < parameters.mu_summ &&
+          parameters.mu_summ <= config.mu_summ_limit))
     {
         return false;
     }
@@ -70,10 +90,12 @@ bool calculate_mass_parameters(
         parameters.mu_march / (1.0 - parameters.mu_start);
     parameters.Km = parameters.mu_march / parameters.mu_start;
 
+    // mu_march — доля маршевого топлива относительно m0. Поэтому баланс
+    // стартовой массы записывается непосредственно через обе абсолютные
+    // доли топлива и коэффициенты сухой массы двигателей.
     const double denominator =
         1.0 - config.beta_start * parameters.mu_start -
-        (1.0 - parameters.mu_start) * config.beta_march *
-            parameters.mu_march_local;
+        config.beta_march * parameters.mu_march;
     if (!finite_positive(denominator))
         return false;
 
@@ -207,8 +229,12 @@ void save_summary_file(
          << "Полезная нагрузка\t" << config.payload_mass << "\tкг\n"
          << "m0\t" << p.m0 << "\tкг\n"
          << "Hi (коэффициент потерь)\t" << config.loss_factor << "\t-\n"
+         << "Iуд.р\t" << config.start_specific_impulse << "\tм/с\n"
+         << "Iуд.м\t" << config.march_specific_impulse << "\tм/с\n"
          << "beta_start\t" << p.beta_start << "\t-\n"
          << "beta_march\t" << p.beta_march << "\t-\n"
+         << "v_id\t" << p.ideal_velocity << "\tм/с\n"
+         << "Iуд.ср\t" << p.average_specific_impulse << "\tм/с\n"
          << "mu_summ\t" << p.mu_summ << "\t-\n"
          << "mu_0 (стартовое топливо)\t" << p.mu_start << "\t-\n"
          << "mu_1 (маршевое топливо, относительно m0)\t"
@@ -236,6 +262,10 @@ void save_summary_file(
          << "Стартовая дальность\t" << p.start_distance << "\tм\n"
          << "Маршевая дальность\t" << p.march_distance << "\tм\n"
          << "Время подготовки\t" << config.preparation_duration << "\tс\n"
+         << "Время разгона\t" << config.start_duration << "\tс\n"
+         << "Время марша\t" << p.march_time << "\tс\n"
+         << "Время полёта без подготовки\t" << p.powered_flight_time
+         << "\tс\n"
          << "Время полёта\t" << p.flight_time << "\tс\n";
 }
 }
@@ -305,35 +335,45 @@ BalSimulationResult run_bal_simulation(const BalSimulationConfig& config)
         result.status = "invalid_initial_velocity";
         return result;
     }
-    if (!calculate_mass_parameters(config, v0, v_march, result.parameters) ||
-        !calculate_geometry(config, result.parameters))
-    {
-        result.status = "invalid_mass_parameters";
-        return result;
-    }
 
     BalMassParameters& p = result.parameters;
+    p.v0 = v0;
+    p.v_march = v_march;
+    p.delta_v_start = v_march - v0;
     p.preparation_distance = v0 * config.preparation_duration;
-    p.start_distance = v0 * config.start_duration +
-        0.5 * (p.delta_v_start / config.start_duration) *
-        config.start_duration * config.start_duration;
-    p.march_distance = config.target_range -
-        p.preparation_distance - p.start_distance;
 
+    // L в новой модели отсчитывается от начала разгона. Подготовительная
+    // дальность остаётся отдельным координатным смещением траектории.
+    p.start_distance =
+        (v0 + v_march) * config.start_duration / 2.0;
+    p.march_distance = config.target_range - p.start_distance;
     if (p.march_distance <= 0.0)
     {
         result.status = "invalid_target_range";
         return result;
     }
 
-    const double march_time = p.march_distance / v_march;
-    p.flight_time = config.preparation_duration +
-        config.start_duration + march_time;
+    p.march_time = p.march_distance / v_march;
+    p.powered_flight_time = config.start_duration + p.march_time;
+    p.flight_time = config.preparation_duration + p.powered_flight_time;
+
+    if (!finite_positive(p.delta_v_start) ||
+        !finite_positive(p.start_distance) ||
+        !finite_positive(p.march_distance) ||
+        !finite_positive(p.march_time) ||
+        !finite_positive(p.powered_flight_time) ||
+        !finite_positive(p.flight_time) ||
+        !calculate_mass_parameters(config, p) ||
+        !calculate_geometry(config, p))
+    {
+        result.status = "invalid_mass_parameters";
+        return result;
+    }
+
     p.start_mass_end = p.m0 * (1.0 - p.mu_start);
     p.march_mass_end = p.m0 * (1.0 - p.mu_summ);
 
-    if (!finite_positive(march_time) ||
-        !finite_positive(p.start_mass_end) ||
+    if (!finite_positive(p.start_mass_end) ||
         !finite_positive(p.march_mass_end))
     {
         result.status = "invalid_march_parameters";
@@ -343,9 +383,9 @@ BalSimulationResult run_bal_simulation(const BalSimulationConfig& config)
     // Экспоненциальный маршевый расход подбирается так, чтобы за время
     // маршевого участка масса точно перешла от start_mass_end к dry mass.
     const double march_decay = std::log(
-        p.start_mass_end / p.march_mass_end) / march_time;
+        p.start_mass_end / p.march_mass_end) / p.march_time;
     const double average_march_fuel_rate =
-        p.march_fuel_mass / march_time;
+        p.march_fuel_mass / p.march_time;
     p.march_thrust = average_march_fuel_rate *
         config.march_specific_impulse;
     p.march_thrust_start = march_decay * p.start_mass_end *
@@ -494,8 +534,12 @@ void print_bal_simulation_report(
               << "beta_старт                      " << p.beta_start
               << "       -\n"
               << "beta_марш                       " << p.beta_march
-              << "       -\n"
-              << "mu_старт                        " << p.mu_start
+               << "       -\n"
+               << "v_id                            " << p.ideal_velocity
+               << "       м/с\n"
+               << "Iуд.ср                         " << p.average_specific_impulse
+               << "       м/с\n"
+               << "mu_старт                        " << p.mu_start
               << "       -\n"
               << "mu_марш                         " << p.mu_march
               << "       -\n"
@@ -530,8 +574,12 @@ void print_bal_simulation_report(
               << "v_марш                          " << p.v_march
               << "       м/с\n"
               << "Дальность                       " << config.target_range / 1000.0
-              << "       км\n"
-              << "Время полёта                    " << p.flight_time
+               << "       км (от начала разгона)\n"
+               << "Время марша                     " << p.march_time
+               << "       с\n"
+               << "Время полёта без подготовки     " << p.powered_flight_time
+               << "       с\n"
+               << "Время полёта                    " << p.flight_time
               << "       с\n";
     std::cout << "==============================================\n";
 }
