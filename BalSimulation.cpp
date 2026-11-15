@@ -39,6 +39,8 @@ bool calculate_mass_parameters(
         !finite_positive(config.march_specific_impulse) ||
         !finite_positive(config.start_duration) ||
         !finite_positive(config.loss_factor) ||
+        !finite_non_negative(config.k_etk) ||
+        config.k_etk > 1.0 ||
         !finite_positive(config.mu_summ_limit) ||
         config.mu_summ_limit > 1.0 ||
         !finite_positive(config.beta_start) ||
@@ -58,7 +60,7 @@ bool calculate_mass_parameters(
     // значение не заменяется на новое фиксированное число и применяется
     // одинаково к удельным импульсам обоих режимов.
     parameters.ideal_velocity = parameters.delta_v_start +
-        g * parameters.powered_flight_time;
+        config.k_etk * g * parameters.powered_flight_time;
     parameters.average_specific_impulse =
         (config.start_specific_impulse * config.start_duration +
          config.march_specific_impulse * parameters.march_time) /
@@ -229,6 +231,7 @@ void save_summary_file(
          << "Полезная нагрузка\t" << config.payload_mass << "\tкг\n"
          << "m0\t" << p.m0 << "\tкг\n"
          << "Hi (коэффициент потерь)\t" << config.loss_factor << "\t-\n"
+         << "k_этк (траекторные потери)\t" << config.k_etk << "\t-\n"
          << "Iуд.р\t" << config.start_specific_impulse << "\tм/с\n"
          << "Iуд.м\t" << config.march_specific_impulse << "\tм/с\n"
          << "beta_start\t" << p.beta_start << "\t-\n"
@@ -278,7 +281,8 @@ BalSimulationConfig make_urvp_bd_config()
     config.altitude = 8000.0;
     config.initial_mach = 0.8;
     config.initial_velocity = 0.0;
-    config.march_mach = 2.0;
+    config.march_mach = 2.7;
+    config.k_etk = 0.25;
     config.target_range = 700000.0;
     config.payload_mass = 375.0;
     config.diameter = 0.650;
@@ -298,6 +302,7 @@ BalSimulationConfig make_urvp_md_config()
     config.initial_velocity = 65.0;
     config.initial_mach = 0.0;
     config.march_mach = 2.0;
+    config.k_etk = 0.65;
     config.target_range = 125000.0;
     config.payload_mass = 140.0;
     config.diameter = 0.350;
@@ -530,6 +535,8 @@ void print_bal_simulation_report(
     std::cout << "Режим подготовки                 "
               << config.preparation_duration << "       с\n"
               << "Hi                              " << config.loss_factor
+              << "       -\n"
+              << "k_этк                           " << config.k_etk
               << "       -\n"
               << "beta_старт                      " << p.beta_start
               << "       -\n"
