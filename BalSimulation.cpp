@@ -304,7 +304,7 @@ BalSimulationConfig make_urvp_md_config()
     config.march_mach = 2.0;
     config.k_etk = 0.65;
     config.target_range = 125000.0;
-    config.payload_mass = 140.0;
+    config.payload_mass = 200.0;
     config.diameter = 0.350;
 
     // Х-31АД используется только как сравнительный образец в таблице:

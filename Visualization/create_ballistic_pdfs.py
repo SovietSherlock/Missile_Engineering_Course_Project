@@ -353,6 +353,19 @@ def approx(value: float, digits: int = 3) -> str:
     return f"≈ {fmt(value, digits)} (Оценочно)"
 
 
+def estimate_generalized_payload(
+    mass: float,
+    mu_start: float,
+    mu_march: float,
+    beta_start: float,
+    beta_march: float,
+) -> float:
+    """Восстанавливает обобщённую полезную нагрузку из массового баланса."""
+    return mass * (
+        1.0 - beta_start * mu_start - beta_march * mu_march
+    )
+
+
 def estimate_prototype_parameters(
     summary: dict[str, float],
     mass: float,
@@ -497,9 +510,21 @@ def create_results_table(scenario: ScenarioConfig) -> None:
     else:
         # Историческое оформление таблицы УРВП_БД с теми же параметрами,
         # которые задаёт make_urvp_bd_config().
+        x35_payload_low = estimate_generalized_payload(
+            mass=550.0, mu_start=0.061, mu_march=0.289,
+            beta_start=1.155, beta_march=1.155,
+        )
+        x35_payload_high = estimate_generalized_payload(
+            mass=610.0, mu_start=0.061, mu_march=0.289,
+            beta_start=1.155, beta_march=1.155,
+        )
+        oniks_payload = estimate_generalized_payload(
+            mass=2500.0, mu_start=0.243, mu_march=0.307,
+            beta_start=1.130, beta_march=1.130,
+        )
         rows = [
             ("Суммарная масса ракеты, кг", "550–610*", value("m0"), "≈ 2500*"),
-            ("Обобщённая полезная нагрузка, кг", "н/д", value("Полезная нагрузка"), "н/д"),
+            ("Обобщённая полезная нагрузка, кг", f"≈ {fmt(x35_payload_low, 0)}–{fmt(x35_payload_high, 0)} (Оценочно)", value("Полезная нагрузка"), f"≈ {fmt(oniks_payload, 0)} (Оценочно)"),
             ("Суммарная относительная масса топлива", "≈ 0,350 (Оценочно)", value("mu_summ", 4), "≈ 0,550 (Оценочно)"),
             ("Относительная масса топлива стартового режима", "≈ 0,061 (Оценочно)", value("mu_0 (стартовое топливо)", 4), "≈ 0,243 (Оценочно)"),
             ("Относительная масса топлива маршевого режима", "≈ 0,289 (Оценочно)", value("mu_1 (маршевое топливо, относительно m0)", 4), "≈ 0,307 (Оценочно)"),
@@ -637,6 +662,7 @@ def create_results_table(scenario: ScenarioConfig) -> None:
         notes = common_notes + [
             "Нагрузка на мидель проектируемой ракеты принята аналогичной П-800 «Оникс»: mref=2500 кг, dref=0,67 м; q_m0 рассчитывается по этим данным.",
             "Калибр проектируемой ракеты принудительно задан d=0,65 м; площадь миделя и q_m0 проектируемой ракеты пересчитаны для этого калибра. График оптимизации q_m1(q_m0) исключён.",
+            "Обобщённая полезная нагрузка Х-35У и П-800 «Оникс» рассчитана оценочно обратным применением массового баланса: mпр.п.н.=m0(1−β0μ0−β1μ1) с использованием приведённых в таблице оценочных μ0, μ1, β0 и β1; диапазон Х-35У соответствует массе 550–610 кг.",
             "Значения в колонках Х-35У и П-800 «Оникс», отмеченные «Оценочно», получены по открытым данным и инженерным допущениям и не являются паспортными характеристиками.",
         ]
         source_lines = [
